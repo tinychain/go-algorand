@@ -1,4 +1,4 @@
-package algorand
+package main
 
 import (
 	"bytes"
@@ -27,6 +27,13 @@ type Blockchain struct {
 	blocks       map[common.Hash]*Block
 }
 
+func newBlockchain() *Blockchain {
+	return &Blockchain{
+		heightToHash: make(map[uint64]common.Hash),
+		blocks:       make(map[common.Hash]*Block),
+	}
+}
+
 func (bc *Blockchain) get(hash common.Hash, height uint64) *Block {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
@@ -40,10 +47,13 @@ func (bc *Blockchain) getByHeight(height uint64) *Block {
 	return bc.blocks[constructKey(hash, height)]
 }
 
-func (bc *Blockchain) append(blk *Block) {
+func (bc *Blockchain) add(blk *Block) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 	key := constructKey(blk.Hash(), blk.Height)
+	if _, ok := bc.blocks[key]; ok {
+		return
+	}
 	bc.blocks[key] = blk
 	bc.heightToHash[blk.Height] = blk.Hash()
 }
