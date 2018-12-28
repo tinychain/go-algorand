@@ -24,11 +24,15 @@ func (pub *PublicKey) VerifySign(m, sign []byte) error {
 }
 
 func (pub *PublicKey) VerifyVRF(vrf, proof []byte) error {
-
+	return nil
 }
 
 type PrivateKey struct {
 	sk ed25519.PrivateKey
+}
+
+func (priv *PrivateKey) PublicKey() *PublicKey {
+	return &PublicKey{priv.sk.Public().(ed25519.PublicKey)}
 }
 
 func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
