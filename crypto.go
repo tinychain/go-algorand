@@ -4,7 +4,10 @@ import (
 	"crypto"
 	"crypto/rand"
 	"fmt"
+	"github.com/fatechain/fatechain/common"
 	"golang.org/x/crypto/ed25519"
+	rander "math/rand"
+	"time"
 )
 
 type PublicKey struct {
@@ -23,12 +26,16 @@ func (pub *PublicKey) VerifySign(m, sign []byte) error {
 	return nil
 }
 
-func (pub *PublicKey) VerifyVRF(vrf, proof []byte) error {
-
+func (pub *PublicKey) VerifyVRF(vrf, proof, m []byte) error {
+	return nil
 }
 
 type PrivateKey struct {
 	sk ed25519.PrivateKey
+}
+
+func (priv *PrivateKey) PublicKey() *PublicKey {
+	return &PublicKey{priv.sk.Public().(ed25519.PublicKey)}
 }
 
 func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
@@ -40,8 +47,10 @@ func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
 	return append(pubkey, sign...), nil
 }
 
-func (priv *PrivateKey) Evaluate() ([]byte, []byte, error) {
-
+func (priv *PrivateKey) Evaluate(m []byte) (value, proof []byte) {
+	rander.Seed(time.Now().UnixNano())
+	value, proof = common.UintToBytes(rander.Uint64()), common.UintToBytes(rander.Uint64())
+	return
 }
 
 func newKeyPair() (*PublicKey, *PrivateKey, error) {
