@@ -49,15 +49,21 @@ func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
 
 func (priv *PrivateKey) Evaluate(m []byte) (value, proof []byte) {
 	rander.Seed(time.Now().UnixNano())
-	value, proof = common.UintToBytes(rander.Uint64()), common.UintToBytes(rander.Uint64())
+	value = common.Sha256(common.UintToBytes(rander.Uint64())).Bytes()
+	proof = common.Sha256(common.UintToBytes(rander.Uint64())).Bytes()
 	return
 }
 
-func newKeyPair() (*PublicKey, *PrivateKey, error) {
+func NewKeyPair() (*PublicKey, *PrivateKey, error) {
 	pk, sk, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return &PublicKey{pk}, &PrivateKey{sk}, nil
+}
+
+func recoverPubkey(sign []byte) *PublicKey {
+	pubkey := sign[:ed25519.PublicKeySize]
+	return &PublicKey{pubkey}
 }
