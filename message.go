@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"github.com/tinychain/algorand/common"
 )
 
@@ -10,12 +11,8 @@ const (
 	// message type
 	VOTE = iota
 	BLOCK_PROPOSAL
+	BLOCK
 )
-
-type BasicMessage struct {
-	Type int    `json:"type"`
-	Data []byte `json:"data"`
-}
 
 type VoteMessage struct {
 	Signature  []byte      `json:"publicKey"`
@@ -66,4 +63,39 @@ func (v *VoteMessage) Sign(priv *PrivateKey) ([]byte, error) {
 
 func (v *VoteMessage) RecoverPubkey() *PublicKey {
 	return recoverPubkey(v.Signature)
+}
+
+type Proposal struct {
+	Prior  uint32 `json:"prior"`
+	VRF    []byte `json:"vrf"`
+	Proof  []byte `json:"proof"`
+	Pubkey []byte `json:"public_key"`
+}
+
+func (b *Proposal) Serialize() ([]byte, error) {
+	return json.Marshal(b)
+}
+
+func (b *Proposal) Deserialize(data []byte) error {
+	return json.Unmarshal(data, b)
+}
+
+func (b *Proposal) RecoverPubkey() *PublicKey {
+	return &PublicKey{b.Pubkey}
+}
+
+func (b *Proposal) Verify(weight uint64, m []byte) error {
+	// verify vrf
+	pubkey := b.RecoverPubkey()
+	if err := pubkey.VerifyVRF(b.VRF, b.Proof, m); err != nil {
+		return err
+	}
+
+	// verify priority
+	subusers := subUsers(expectedBlockProposers, weight, b.VRF)
+	if maxPriority(b.VRF, subusers) != b.Prior {
+		return errors.New("max priority mismatch")
+	}
+
+	return nil
 }

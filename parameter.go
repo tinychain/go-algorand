@@ -22,9 +22,14 @@ const (
 
 	// helper const var
 	committee = "committee"
+	proposer  = "proposer"
 
 	// step
-	REDUCTION_ONE = 1000
-	REDUCTION_TWO = 1001
-	FINAL         = 1002
+	PROPOSE       = 1000
+	REDUCTION_ONE = 1001
+	REDUCTION_TWO = 1002
+	FINAL         = 1003
+
+	FINAL_CONSENSUS     = 0
+	TENTATIVE_CONSENSUS = 1
 )

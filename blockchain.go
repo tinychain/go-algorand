@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"github.com/tinychain/algorand/common"
 	"sync"
 	"time"
@@ -12,13 +13,35 @@ type Block struct {
 	Height     uint64         `json:"height"`
 	ParentHash common.Hash    `json:"parent_hash"`
 	Author     common.Address `json:"author"`
-	Time       int64          `json:"time"`
+	Time       int64          `json:"time"`  // block timestamp
+	Seed       []byte         `json:"seed"`  // vrf-based seed for next round
+	Proof      []byte         `json:"proof"` // proof of vrf-based seed
+	Type       int8           `json:"type"`  // `FINAL` or `TENTATIVE`
+	Signature  []byte         `json:"signature"`
 }
 
 func (blk *Block) Hash() common.Hash {
 	return common.Sha256(bytes.Join([][]byte{
+		common.Uint2Bytes(blk.Round),
 		common.Uint2Bytes(blk.Height),
+		blk.ParentHash.Bytes(),
+		blk.Author.Bytes(),
+		common.Uint2Bytes(uint64(blk.Time)),
+		blk.Seed,
+		blk.Proof,
 	}, nil))
+}
+
+func (blk *Block) RecoverPubkey() *PublicKey {
+	return recoverPubkey(blk.Signature)
+}
+
+func (blk *Block) Serialize() ([]byte, error) {
+	return json.Marshal(blk)
+}
+
+func (blk *Block) Deserialize(data []byte) error {
+	return json.Unmarshal(data, blk)
 }
 
 type Blockchain struct {

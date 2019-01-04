@@ -15,7 +15,10 @@ var (
 	errCountVotesTimeout = errors.New("count votes timeout")
 )
 
+type PID int
+
 type Algorand struct {
+	id      PID
 	pubkey  atomic.Value
 	privkey *PrivateKey
 
@@ -24,25 +27,30 @@ type Algorand struct {
 
 	// context
 	weight uint64 // weight is the total amount of tokens an account owns.
+
+	quitCh chan struct{}
 }
 
-func NewAlgorand() *Algorand {
+func NewAlgorand(id PID) *Algorand {
 	rand.Seed(time.Now().Unix())
 	tokenOwned := rand.Uint64()
 
-	return &Algorand{
+	alg := &Algorand{
+		id:     id,
 		chain:  newBlockchain(),
-		peer:   newPeer(),
 		weight: tokenOwned,
 	}
+	alg.peer = newPeer(alg)
+	return alg
 }
 
 func (alg *Algorand) start() {
-
+	alg.quitCh = make(chan struct{})
+	go alg.run()
 }
 
 func (alg *Algorand) stop() {
-
+	close(alg.quitCh)
 }
 
 // round returns the current round number.
@@ -52,9 +60,10 @@ func (alg *Algorand) round() uint64 {
 	return uint64((genesisTime-now)/int64(timeoutPerRound) + 1)
 }
 
+// seed returns the vrf of block at round r-1.
 func (alg *Algorand) seed() []byte {
 	last := alg.chain.last
-	return last.Hash().Bytes()
+	return last.Seed
 }
 
 func (alg *Algorand) publicKey() *PublicKey {
@@ -66,8 +75,25 @@ func (alg *Algorand) publicKey() *PublicKey {
 	return pubkey
 }
 
+// run performs the all procedures of Algorand algorithm in infinite loop.
 func (alg *Algorand) run() {
 	// propose block
+	for {
+		select {
+		case <-alg.quitCh:
+			return
+		default:
+		}
+
+	}
+}
+
+// proposeBlock proposes a block.
+func (alg *Algorand) proposeBlock() *Block {
+	seedr, _ := alg.privkey.Evaluate(bytes.Join([][]byte{alg.seed(), common.Uint2Bytes(alg.round())}, nil))
+	return &Block{
+		Seed: seedr,
+	}
 }
 
 // sortition runs cryptographic selection procedure and returns vrf,proof and amount of selected sub-users.
@@ -88,7 +114,7 @@ func (alg *Algorand) verifySort(vrf, proof, seed, role []byte, expectedNum int) 
 
 // committeeVote votes for `value`.
 func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash common.Hash) error {
-	role := role(round, step)
+	role := role(committee, round, step)
 	vrf, proof, j := alg.sortition(alg.seed(), role, expectedNum, alg.weight)
 
 	if j > 0 {
@@ -115,14 +141,17 @@ func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash
 }
 
 // BA runs BA* for the next round, with a proposed block.
-func (alg *Algorand) BA(round uint64, block *Block) {
+func (alg *Algorand) BA(round uint64, block *Block) (int, *Block) {
 	hash := alg.reduction(round, block.Hash())
 	hash = alg.binaryBA(round, hash)
 	r, _ := alg.countVotes(round, FINAL, finalThreshold, expectedFinalCommitteeMembers, lamdaStep)
+	blk := alg.peer.blocks[hash]
 	if r == hash {
-
+		blk.Type = FINAL_CONSENSUS
+		return FINAL_CONSENSUS, blk
 	} else {
-
+		blk.Type = TENTATIVE_CONSENSUS
+		return TENTATIVE_CONSENSUS, blk
 	}
 }
 
@@ -208,7 +237,7 @@ func (alg *Algorand) countVotes(round uint64, step int, threshold float64, expec
 	expired := time.NewTimer(timeout)
 	counts := make(map[common.Hash]int)
 	voters := make(map[PublicKey]struct{})
-	it := alg.peer.iterator(constructMsgKey(round, step))
+	it := alg.peer.voteIterator(constructVoteKey(round, step))
 	for {
 		msg := it.next()
 		if msg == nil {
@@ -249,7 +278,7 @@ func (alg *Algorand) processMsg(message *VoteMessage, expectedNum int) (votes in
 		return 0, common.Hash{}, nil
 	}
 
-	votes = alg.verifySort(message.VRF, message.Proof, alg.seed(), role(message.Round, message.Step), expectedNum)
+	votes = alg.verifySort(message.VRF, message.Proof, alg.seed(), role(committee, message.Round, message.Step), expectedNum)
 	hash = message.Hash
 	vrf = message.VRF
 	return
@@ -259,7 +288,7 @@ func (alg *Algorand) processMsg(message *VoteMessage, expectedNum int) (votes in
 // It is a procedure to help Algorand recover if an adversary sends faulty messages to the network and prevents the network from coming to consensus.
 func (alg *Algorand) commonCoin(round uint64, step int, expectedNum int) int64 {
 	minhash := new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0))
-	msgList := alg.peer.getIncomingMsgs(constructMsgKey(round, step))
+	msgList := alg.peer.getIncomingMsgs(constructVoteKey(round, step))
 	for _, m := range msgList {
 		msg := m.(*VoteMessage)
 		votes, _, vrf := alg.processMsg(msg, expectedNum)
@@ -274,9 +303,9 @@ func (alg *Algorand) commonCoin(round uint64, step int, expectedNum int) int64 {
 }
 
 // role returns the role bytes from current round and step
-func role(round uint64, step int) []byte {
+func role(iden string, round uint64, step int) []byte {
 	return bytes.Join([][]byte{
-		[]byte(committee),
+		[]byte(iden),
 		common.Uint2Bytes(round),
 		common.Uint2Bytes(uint64(step)),
 	}, nil)
@@ -289,6 +318,17 @@ func priority(vrf []byte, index int) uint32 {
 	return uint32(new(big.Int).SetBytes(data.Bytes()).Uint64())
 }
 
+func maxPriority(vrf []byte, users int) uint32 {
+	var maxPrior uint32
+	for i := 1; i <= users; i++ {
+		prior := priority(vrf, i)
+		if prior > maxPrior {
+			maxPrior = prior
+		}
+	}
+	return maxPrior
+}
+
 // subUsers return the selected amount of sub-users determined from the mathematics protocol.
 func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 	binomial := &distuv.Binomial{
@@ -296,20 +336,20 @@ func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 		P: float64(expectedNum) / float64(totalTokenAmount),
 	}
 	j := 0
-	// hash / 2^hashlen
+	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
 	hashBig := new(big.Float).SetInt(new(big.Int).SetBytes(vrf))
-	denoBig := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0)))
-	t := hashBig.Quo(hashBig, denoBig)
+	maxHash := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0)))
 	for {
-		lower := big.NewFloat(binomial.CDF(float64(j)))
-		upper := big.NewFloat(binomial.CDF(float64(j + 1)))
-		if t.Cmp(lower) >= 0 && t.Cmp(upper) < 0 {
+		lower := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j))), maxHash)
+		upper := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j+1))), maxHash)
+		if hashBig.Cmp(lower) >= 0 && hashBig.Cmp(upper) < 0 {
 			break
 		}
 	}
 	return j
 }
 
+// constructSeed construct a new bytes for vrf generation.
 func constructSeed(seed, role []byte) []byte {
 	return bytes.Join([][]byte{seed, role}, nil)
 }
