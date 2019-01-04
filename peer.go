@@ -44,7 +44,6 @@ func (p *Peer) handle(typ int, data []byte) error {
 		blk := &Block{}
 		blk.Deserialize(data)
 		p.blocks[blk.Hash()] = blk
-
 	} else if typ == BLOCK_PROPOSAL {
 		bp := &Proposal{}
 		bp.Deserialize(data)

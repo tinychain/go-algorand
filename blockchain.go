@@ -9,8 +9,7 @@ import (
 )
 
 type Block struct {
-	Round      uint64         `json:"round"`
-	Height     uint64         `json:"height"`
+	Round      uint64         `json:"round"` // block round, namely height
 	ParentHash common.Hash    `json:"parent_hash"`
 	Author     common.Address `json:"author"`
 	Time       int64          `json:"time"`  // block timestamp
@@ -23,7 +22,6 @@ type Block struct {
 func (blk *Block) Hash() common.Hash {
 	return common.Sha256(bytes.Join([][]byte{
 		common.Uint2Bytes(blk.Round),
-		common.Uint2Bytes(blk.Height),
 		blk.ParentHash.Bytes(),
 		blk.Author.Bytes(),
 		common.Uint2Bytes(uint64(blk.Time)),
@@ -45,17 +43,17 @@ func (blk *Block) Deserialize(data []byte) error {
 }
 
 type Blockchain struct {
-	mu           sync.RWMutex
-	last         *Block
-	genesis      *Block
-	heightToHash map[uint64]common.Hash
-	blocks       map[common.Hash]*Block
+	mu          sync.RWMutex
+	last        *Block
+	genesis     *Block
+	roundToHash map[uint64]common.Hash
+	blocks      map[common.Hash]*Block
 }
 
 func newBlockchain() *Blockchain {
 	bc := &Blockchain{
-		heightToHash: make(map[uint64]common.Hash),
-		blocks:       make(map[common.Hash]*Block),
+		roundToHash: make(map[uint64]common.Hash),
+		blocks:      make(map[common.Hash]*Block),
 	}
 	bc.init()
 	return bc
@@ -66,40 +64,39 @@ func (bc *Blockchain) init() {
 	// create genesis
 	bc.genesis = &Block{
 		Round:      0,
-		Height:     0,
 		ParentHash: emptyHash,
 		Author:     common.HashToAddr(emptyHash),
 		Time:       time.Now().Unix(),
 	}
 }
 
-func (bc *Blockchain) get(hash common.Hash, height uint64) *Block {
+func (bc *Blockchain) get(hash common.Hash, round uint64) *Block {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
-	return bc.blocks[constructBlockKey(hash, height)]
+	return bc.blocks[constructBlockKey(hash, round)]
 }
 
-func (bc *Blockchain) getByHeight(height uint64) *Block {
+func (bc *Blockchain) getByRound(round uint64) *Block {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
-	hash := bc.heightToHash[height]
-	return bc.blocks[constructBlockKey(hash, height)]
+	hash := bc.roundToHash[round]
+	return bc.blocks[constructBlockKey(hash, round)]
 }
 
 func (bc *Blockchain) add(blk *Block) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
-	key := constructBlockKey(blk.Hash(), blk.Height)
+	key := constructBlockKey(blk.Hash(), blk.Round)
 	if _, ok := bc.blocks[key]; ok {
 		return
 	}
 	bc.blocks[key] = blk
-	bc.heightToHash[blk.Height] = blk.Hash()
+	bc.roundToHash[blk.Round] = blk.Hash()
 }
 
-func constructBlockKey(hash common.Hash, height uint64) common.Hash {
+func constructBlockKey(hash common.Hash, round uint64) common.Hash {
 	return common.Sha256(bytes.Join([][]byte{
 		hash.Bytes(),
-		common.Uint2Bytes(height),
+		common.Uint2Bytes(round),
 	}, nil))
 }
