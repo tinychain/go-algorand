@@ -4,7 +4,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"fmt"
-	"github.com/fatechain/fatechain/common"
+	"github.com/tinychain/algorand/common"
 	"golang.org/x/crypto/ed25519"
 	rander "math/rand"
 	"time"
@@ -16,6 +16,10 @@ type PublicKey struct {
 
 func (pub *PublicKey) Bytes() []byte {
 	return pub.pk
+}
+
+func (pub *PublicKey) Address() common.Address {
+	return common.BytesToAddress(pub.pk)
 }
 
 func (pub *PublicKey) VerifySign(m, sign []byte) error {
@@ -49,8 +53,8 @@ func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
 
 func (priv *PrivateKey) Evaluate(m []byte) (value, proof []byte) {
 	rander.Seed(time.Now().UnixNano())
-	value = common.Sha256(common.UintToBytes(rander.Uint64())).Bytes()
-	proof = common.Sha256(common.UintToBytes(rander.Uint64())).Bytes()
+	value, proof = common.Sha256(common.Uint2Bytes(rander.Uint64())).Bytes(),
+		common.Sha256(common.Uint2Bytes(rander.Uint64())).Bytes()
 	return
 }
 

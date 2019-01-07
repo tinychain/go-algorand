@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/pkg/errors"
 	"github.com/tinychain/algorand/common"
 	"gonum.org/v1/gonum/stat/distuv"
 	"math/big"
-	"math/rand"
 	"sync/atomic"
 	"time"
 )
@@ -22,23 +22,15 @@ type Algorand struct {
 	pubkey  atomic.Value
 	privkey *PrivateKey
 
-	chain *Blockchain
-	peer  *Peer
-
-	// context
-	weight uint64 // weight is the total amount of tokens an account owns.
-
+	chain  *Blockchain
+	peer   *Peer
 	quitCh chan struct{}
 }
 
 func NewAlgorand(id PID) *Algorand {
-	rand.Seed(time.Now().Unix())
-	tokenOwned := rand.Uint64()
-
 	alg := &Algorand{
-		id:     id,
-		chain:  newBlockchain(),
-		weight: tokenOwned,
+		id:    id,
+		chain: newBlockchain(),
 	}
 	alg.peer = newPeer(alg)
 	return alg
@@ -53,17 +45,70 @@ func (alg *Algorand) stop() {
 	close(alg.quitCh)
 }
 
-// round returns the current round number.
+// round returns the latest round number.
 func (alg *Algorand) round() uint64 {
-	now := time.Now().Unix()
-	genesisTime := alg.chain.genesis.Time
-	return uint64((genesisTime-now)/int64(timeoutPerRound) + 1)
+	return alg.lastBlock().Round
 }
 
-// seed returns the vrf of block at round r-1.
-func (alg *Algorand) seed() []byte {
-	last := alg.chain.last
-	return last.Seed
+func (alg *Algorand) lastBlock() *Block {
+	return alg.chain.last
+}
+
+// weight returns the weight of the given address.
+func (alg *Algorand) weight(address common.Address) uint64 {
+	return tokenPerNode
+}
+
+// tokenOwn returns the token amount (weight) owned by self node.
+func (alg *Algorand) tokenOwn() uint64 {
+	return alg.weight(alg.Address())
+}
+
+// seed returns the vrf-based seed of block r.
+func (alg *Algorand) vrfSeed(round uint64) (seed, proof []byte) {
+	if round == 0 {
+		return alg.chain.genesis.Seed, nil
+	}
+	lastBlock := alg.chain.getByRound(round - 1)
+	// last block is not genesis, verify the seed r-1.
+	if round != 1 {
+		var err error
+		lastParentBlock := alg.chain.get(lastBlock.ParentHash, lastBlock.Round-1)
+		if lastBlock.Proof != nil {
+			// vrf-based seed
+			pubkey := recoverPubkey(lastBlock.Signature)
+			m := bytes.Join([][]byte{lastParentBlock.Seed, common.Uint2Bytes(lastBlock.Round)}, nil)
+
+			err = pubkey.VerifyVRF(lastBlock.Seed, lastBlock.Proof, m)
+		} else if bytes.Compare(lastBlock.Seed, common.Sha256(
+			bytes.Join([][]byte{
+				lastParentBlock.Seed,
+				common.Uint2Bytes(lastBlock.Round)},
+				nil)).Bytes()) != 0 {
+			// hash-based seed
+			err = errors.New("hash seed invalid")
+		}
+		if err != nil {
+			// seed r-1 invalid
+			return common.Sha256(bytes.Join([][]byte{lastBlock.Seed, common.Uint2Bytes(lastBlock.Round + 1)}, nil)).Bytes(), nil
+		}
+	}
+
+	seed, proof = alg.privkey.Evaluate(bytes.Join([][]byte{lastBlock.Seed, common.Uint2Bytes(lastBlock.Round + 1)}, nil))
+	return
+}
+
+// sortitionSeed returns the selection seed with a refresh interval R.
+func (alg *Algorand) sortitionSeed(round uint64) []byte {
+	realR := round - 1
+	mod := round % R
+	if realR < mod {
+		realR = 0
+	} else {
+		realR -= mod
+	}
+
+	return alg.chain.getByRound(realR).Seed
 }
 
 func (alg *Algorand) publicKey() *PublicKey {
@@ -75,24 +120,139 @@ func (alg *Algorand) publicKey() *PublicKey {
 	return pubkey
 }
 
+func (alg *Algorand) Address() common.Address {
+	return common.BytesToAddress(alg.publicKey().Bytes())
+}
+
 // run performs the all procedures of Algorand algorithm in infinite loop.
 func (alg *Algorand) run() {
+	forkInterval := time.NewTicker(forkResolveInterval)
+
 	// propose block
 	for {
 		select {
 		case <-alg.quitCh:
 			return
+		case <-forkInterval.C:
+			// periodically resolve fork
 		default:
 		}
-
 	}
+
 }
 
-// proposeBlock proposes a block.
+// processMain performs the main processing of algorand algorithm.
+func (alg *Algorand) processMain() {
+	// 1. block proposal
+	block := alg.blockProposal(false)
+
+	// 2. init BA with block with the highest priority.
+	consensusType, block := alg.BA(alg.round()+1, block)
+
+	// 3. reach consensus on a FINAL or TENTATIVE new block.
+	fmt.Printf("reach consensus %d at round %d, block hash %s", consensusType, currRound, block.Hash())
+
+	// 4. append to the chain.
+	alg.chain.add(block)
+
+	// TODO: 5. clear cache
+}
+
+// processForkResolve performs a special algorand processing to resolve fork.
+func (alg *Algorand) processForkResolve() {
+	longest := alg.blockProposal(true)
+	_, fork := alg.BA(longest.Round, longest)
+	alg.chain.resolveFork(fork)
+}
+
+// proposeBlock proposes a new block.
 func (alg *Algorand) proposeBlock() *Block {
-	seedr, _ := alg.privkey.Evaluate(bytes.Join([][]byte{alg.seed(), common.Uint2Bytes(alg.round())}, nil))
-	return &Block{
-		Seed: seedr,
+	currRound := alg.round() + 1
+
+	seed, proof := alg.vrfSeed(currRound)
+	blk := &Block{
+		Round:      currRound,
+		Seed:       seed,
+		ParentHash: alg.lastBlock().Hash(),
+		Author:     alg.publicKey().Address(),
+		Time:       time.Now().Unix(),
+		Proof:      proof,
+	}
+	bhash := blk.Hash()
+	sign, _ := alg.privkey.Sign(bhash.Bytes())
+	blk.Signature = sign
+	return blk
+}
+
+func (alg *Algorand) proposeFork() *Block {
+	longest := alg.lastBlock()
+	empty := &Block{
+		Round:      alg.round() + 1,
+		ParentHash: longest.Hash(),
+	}
+	return empty
+}
+
+// blockProposal performs the block proposal procedure.
+func (alg *Algorand) blockProposal(resolveFork bool) *Block {
+	var iden string
+	if !resolveFork {
+		iden = proposer
+	} else {
+		iden = forkResolve
+	}
+	round := alg.round() + 1
+	vrf, proof, subusers := alg.sortition(alg.sortitionSeed(round), role(iden, round, PROPOSE), expectedBlockProposers, alg.tokenOwn())
+	// have been selected.
+	if subusers > 0 {
+		var (
+			newBlk       *Block
+			proposalType int
+		)
+		if !resolveFork {
+			newBlk = alg.proposeBlock()
+			proposalType = BLOCK_PROPOSAL
+		} else {
+			newBlk = alg.proposeFork()
+			proposalType = FORK_PROPOSAL
+		}
+		proposal := &Proposal{
+			Round:  newBlk.Round,
+			Hash:   newBlk.Hash(),
+			Prior:  maxPriority(vrf, subusers),
+			VRF:    vrf,
+			Proof:  proof,
+			Pubkey: alg.publicKey().Bytes(),
+		}
+		alg.peer.setMaxProposal(round, proposal)
+		blkMsg, _ := newBlk.Serialize()
+		proposalMsg, _ := proposal.Serialize()
+		go alg.peer.gossip(BLOCK, blkMsg)
+		go alg.peer.gossip(proposalType, proposalMsg)
+	}
+
+	// wait for λstepvar + λpriority time to identify the highest priority.
+	timeoutForPriority := time.NewTimer(lamdaStepvar + lamdaPriority)
+	<-timeoutForPriority.C
+
+	// timeout for block gossiping.
+	timeoutForBlockFlying := time.NewTimer(lamdaBlock)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	for {
+		select {
+		case <-timeoutForBlockFlying.C:
+			return &Block{
+				Round:      round,
+				ParentHash: alg.lastBlock().Hash(),
+			}
+		case <-ticker.C:
+			// get the block with the highest priority
+			bhash := alg.peer.getMaxProposal(round).Hash
+			blk := alg.peer.getBlock(bhash)
+			if blk != nil {
+				return blk
+			}
+		}
 	}
 }
 
@@ -109,13 +269,13 @@ func (alg *Algorand) verifySort(vrf, proof, seed, role []byte, expectedNum int) 
 		return 0
 	}
 
-	return subUsers(expectedNum, alg.weight, vrf)
+	return subUsers(expectedNum, alg.tokenOwn(), vrf)
 }
 
 // committeeVote votes for `value`.
 func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash common.Hash) error {
 	role := role(committee, round, step)
-	vrf, proof, j := alg.sortition(alg.seed(), role, expectedNum, alg.weight)
+	vrf, proof, j := alg.sortition(alg.sortitionSeed(round), role, expectedNum, alg.tokenOwn())
 
 	if j > 0 {
 		// Gossip vote message
@@ -141,17 +301,26 @@ func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash
 }
 
 // BA runs BA* for the next round, with a proposed block.
-func (alg *Algorand) BA(round uint64, block *Block) (int, *Block) {
+func (alg *Algorand) BA(round uint64, block *Block) (int8, *Block) {
+	var newBlk *Block
 	hash := alg.reduction(round, block.Hash())
 	hash = alg.binaryBA(round, hash)
 	r, _ := alg.countVotes(round, FINAL, finalThreshold, expectedFinalCommitteeMembers, lamdaStep)
-	blk := alg.peer.blocks[hash]
-	if r == hash {
-		blk.Type = FINAL_CONSENSUS
-		return FINAL_CONSENSUS, blk
+	if prevHash := alg.lastBlock().Hash(); hash == emptyHash(round, prevHash) {
+		// empty block
+		newBlk = &Block{
+			Round:      round,
+			ParentHash: prevHash,
+		}
 	} else {
-		blk.Type = TENTATIVE_CONSENSUS
-		return TENTATIVE_CONSENSUS, blk
+		newBlk = alg.peer.getBlock(hash)
+	}
+	if r == hash {
+		newBlk.Type = FINAL_CONSENSUS
+		return FINAL_CONSENSUS, newBlk
+	} else {
+		newBlk.Type = TENTATIVE_CONSENSUS
+		return TENTATIVE_CONSENSUS, newBlk
 	}
 }
 
@@ -237,7 +406,7 @@ func (alg *Algorand) countVotes(round uint64, step int, threshold float64, expec
 	expired := time.NewTimer(timeout)
 	counts := make(map[common.Hash]int)
 	voters := make(map[PublicKey]struct{})
-	it := alg.peer.voteIterator(constructVoteKey(round, step))
+	it := alg.peer.voteIterator(round, step)
 	for {
 		msg := it.next()
 		if msg == nil {
@@ -278,7 +447,7 @@ func (alg *Algorand) processMsg(message *VoteMessage, expectedNum int) (votes in
 		return 0, common.Hash{}, nil
 	}
 
-	votes = alg.verifySort(message.VRF, message.Proof, alg.seed(), role(committee, message.Round, message.Step), expectedNum)
+	votes = alg.verifySort(message.VRF, message.Proof, alg.sortitionSeed(message.Round), role(committee, message.Round, message.Step), expectedNum)
 	hash = message.Hash
 	vrf = message.VRF
 	return
@@ -288,7 +457,7 @@ func (alg *Algorand) processMsg(message *VoteMessage, expectedNum int) (votes in
 // It is a procedure to help Algorand recover if an adversary sends faulty messages to the network and prevents the network from coming to consensus.
 func (alg *Algorand) commonCoin(round uint64, step int, expectedNum int) int64 {
 	minhash := new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0))
-	msgList := alg.peer.getIncomingMsgs(constructVoteKey(round, step))
+	msgList := alg.peer.getIncomingMsgs(round, step)
 	for _, m := range msgList {
 		msg := m.(*VoteMessage)
 		votes, _, vrf := alg.processMsg(msg, expectedNum)

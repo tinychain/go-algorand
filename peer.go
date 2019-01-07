@@ -9,7 +9,12 @@ import (
 var peerPool *PeerPool
 
 type Peer struct {
-	algorand      *Algorand
+	algorand *Algorand
+
+	vmu sync.RWMutex // vote msg mutex
+	bmu sync.RWMutex // block list mutex
+	pmu sync.RWMutex // proposal list mutex
+
 	incomingVotes map[string]*List
 	blocks        map[common.Hash]*Block
 	maxProposals  map[uint64]*Proposal
@@ -30,7 +35,7 @@ func (p *Peer) ID() PID {
 func (p *Peer) gossip(typ int, data []byte) {
 	ppool := GetPeerPool()
 
-	// TODO: Gossip
+	// simulate gossiping
 	for _, peer := range ppool.peers {
 		if peer.ID() == p.ID() {
 			continue
@@ -43,43 +48,85 @@ func (p *Peer) handle(typ int, data []byte) error {
 	if typ == BLOCK {
 		blk := &Block{}
 		blk.Deserialize(data)
-		p.blocks[blk.Hash()] = blk
-	} else if typ == BLOCK_PROPOSAL {
+		p.addBlock(blk.Hash(), blk)
+	} else if typ == BLOCK_PROPOSAL || typ == FORK_PROPOSAL {
 		bp := &Proposal{}
 		bp.Deserialize(data)
-		maxProposal := p.maxProposals[p.algorand.round()]
-		if bp.Prior <= maxProposal.Prior {
+		p.pmu.RLock()
+		maxProposal := p.maxProposals[bp.Round]
+		p.pmu.RUnlock()
+		if (typ == BLOCK_PROPOSAL && bp.Prior <= maxProposal.Prior) ||
+			(typ == FORK_PROPOSAL && bp.Round <= maxProposal.Round) {
 			return nil
 		}
-		if err := bp.Verify(p.algorand.weight, constructSeed(p.algorand.seed(), role(proposer, p.algorand.round(), PROPOSE))); err != nil {
+		if err := bp.Verify(p.algorand.weight(bp.Address()), constructSeed(p.algorand.sortitionSeed(bp.Round), role(proposer, bp.Round, PROPOSE)));
+			err != nil {
 			return err
 		}
-		p.maxProposals[p.algorand.round()] = maxProposal
+		p.setMaxProposal(bp.Round, bp)
 	} else if typ == VOTE {
 		vote := &VoteMessage{}
 		vote.Deserialize(data)
-		list, ok := p.incomingVotes[constructVoteKey(vote.Round, vote.Step)]
+		key := constructVoteKey(vote.Round, vote.Step)
+		p.vmu.RLock()
+		list, ok := p.incomingVotes[key]
+		p.vmu.RUnlock()
 		if !ok {
 			list = newList()
 		}
 		list.add(vote)
+		p.vmu.Lock()
+		p.incomingVotes[key] = list
+		p.vmu.Unlock()
 	}
 	return nil
 }
 
 // iterator returns the iterator of incoming messages queue.
-func (p *Peer) voteIterator(key string) *Iterator {
+func (p *Peer) voteIterator(round uint64, step int) *Iterator {
 	return &Iterator{
-		list: p.incomingVotes[key],
+		list: p.incomingVotes[constructVoteKey(round, step)],
 	}
 }
 
-func (p *Peer) getIncomingMsgs(key string) []interface{} {
-	l := p.incomingVotes[key]
+func (p *Peer) getIncomingMsgs(round uint64, step int) []interface{} {
+	p.vmu.RLock()
+	defer p.vmu.RUnlock()
+	l := p.incomingVotes[constructVoteKey(round, step)]
 	if l == nil {
 		return nil
 	}
 	return l.list
+}
+
+func (p *Peer) getBlock(hash common.Hash) *Block {
+	p.bmu.RLock()
+	defer p.bmu.RUnlock()
+	return p.blocks[hash]
+}
+
+func (p *Peer) addBlock(hash common.Hash, blk *Block) {
+	p.bmu.Lock()
+	defer p.bmu.Unlock()
+	p.blocks[hash] = blk
+}
+
+func (p *Peer) setMaxProposal(round uint64, proposal *Proposal) {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	p.maxProposals[round] = proposal
+}
+
+func (p *Peer) getMaxProposal(round uint64) *Proposal {
+	p.pmu.RLock()
+	defer p.pmu.RUnlock()
+	return p.maxProposals[round]
+}
+
+func (p *Peer) clearProposal(round uint64) {
+	p.pmu.Lock()
+	defer p.pmu.Unlock()
+	delete(p.maxProposals, round)
 }
 
 func constructVoteKey(round uint64, step int) string {

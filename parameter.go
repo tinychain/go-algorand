@@ -4,7 +4,10 @@ import "time"
 
 const (
 	// Algorand system parameters
-	totalTokenAmount              = 1000
+	totalTokenAmount = 10000
+	node             = 10
+	tokenPerNode     = totalTokenAmount / node
+
 	expectedBlockProposers        = 26
 	expectedCommitteeMembers      = 2000
 	thresholdOfBAStep             = 0.685
@@ -18,11 +21,14 @@ const (
 	lamdaStep     = 20 * time.Second // timeout for BA* step.
 	lamdaStepvar  = 5 * time.Second  // estimate of BA* completion time variance.
 
-	timeoutPerRound = 60 * time.Second
+	// interval
+	R                   = 1000          // seed refresh interval (# of rounds)
+	forkResolveInterval = 1 * time.Hour // fork resolve interval time
 
 	// helper const var
-	committee = "committee"
-	proposer  = "proposer"
+	committee   = "committee"
+	proposer    = "proposer"
+	forkResolve = "forkresolve"
 
 	// step
 	PROPOSE       = 1000

@@ -11,6 +11,7 @@ const (
 	// message type
 	VOTE = iota
 	BLOCK_PROPOSAL
+	FORK_PROPOSAL
 	BLOCK
 )
 
@@ -66,10 +67,12 @@ func (v *VoteMessage) RecoverPubkey() *PublicKey {
 }
 
 type Proposal struct {
-	Prior  uint32 `json:"prior"`
-	VRF    []byte `json:"vrf"`
-	Proof  []byte `json:"proof"`
-	Pubkey []byte `json:"public_key"`
+	Round  uint64      `json:"round"`
+	Hash   common.Hash `json:"hash"`
+	Prior  uint32      `json:"prior"`
+	VRF    []byte      `json:"vrf"`
+	Proof  []byte      `json:"proof"`
+	Pubkey []byte      `json:"public_key"`
 }
 
 func (b *Proposal) Serialize() ([]byte, error) {
@@ -80,13 +83,17 @@ func (b *Proposal) Deserialize(data []byte) error {
 	return json.Unmarshal(data, b)
 }
 
-func (b *Proposal) RecoverPubkey() *PublicKey {
+func (b *Proposal) PublicKey() *PublicKey {
 	return &PublicKey{b.Pubkey}
+}
+
+func (b *Proposal) Address() common.Address {
+	return common.BytesToAddress(b.Pubkey)
 }
 
 func (b *Proposal) Verify(weight uint64, m []byte) error {
 	// verify vrf
-	pubkey := b.RecoverPubkey()
+	pubkey := b.PublicKey()
 	if err := pubkey.VerifyVRF(b.VRF, b.Proof, m); err != nil {
 		return err
 	}
