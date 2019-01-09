@@ -6,7 +6,7 @@
 
 ## 关键概念
 
-1. **VRF**: 可验证随机函数。简单来说是：`VRF,Proof = VRF(sk,seed)`，`sk`为私钥，`seed`为随机种子；通过`Verify(proof,pk,seed)`验证`vrf`的合法性。
+1. **VRF**: 可验证随机函数。简单来说是：`vrf,Proof = VRF(sk,seed)`，`sk`为私钥，`seed`为随机种子；通过`Verify(proof,pk,seed)`验证`vrf`的合法性。
 2. **cryptographic sorition**: 根据用户本轮的VRF值，自身的权重以及公开的区块链信息，计算出某用户本轮被选举的`sub-users`个数，并提供相应的证明。
 3. **committee member**: 见证人委员会，即使用`cryptographic sortition`选举出的用户集合。
 4. **FINAL**共识：全网用户对某一非空块达成了共识。`FINAL`区块及之前区块所包含的交易均被确认。
