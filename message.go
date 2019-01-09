@@ -94,7 +94,7 @@ func (b *Proposal) Address() common.Address {
 func (b *Proposal) Verify(weight uint64, m []byte) error {
 	// verify vrf
 	pubkey := b.PublicKey()
-	if err := pubkey.VerifyVRF(b.VRF, b.Proof, m); err != nil {
+	if err := pubkey.VerifyVRF(b.Proof, m); err != nil {
 		return err
 	}
 

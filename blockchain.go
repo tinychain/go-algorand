@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/tinychain/algorand/common"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -24,14 +25,32 @@ type Block struct {
 }
 
 func (blk *Block) Hash() common.Hash {
-	return common.Sha256(bytes.Join([][]byte{
+	data := bytes.Join([][]byte{
 		common.Uint2Bytes(blk.Round),
 		blk.ParentHash.Bytes(),
-		blk.Author.Bytes(),
-		common.Uint2Bytes(uint64(blk.Time)),
-		blk.Seed,
-		blk.Proof,
-	}, nil))
+	}, nil)
+
+	if !blk.Author.Nil() {
+		data = append(data, bytes.Join([][]byte{
+			blk.Author.Bytes(),
+			blk.AuthorVRF,
+			blk.AuthorProof,
+		}, nil)...)
+	}
+
+	if blk.Time != 0 {
+		data = append(data, common.Uint2Bytes(uint64(blk.Time))...)
+	}
+
+	if blk.Seed != nil {
+		data = append(data, blk.Seed...)
+	}
+
+	if blk.Proof != nil {
+		data = append(data, blk.Proof...)
+	}
+
+	return common.Sha256(data)
 }
 
 func (blk *Block) RecoverPubkey() *PublicKey {
@@ -62,14 +81,17 @@ func newBlockchain() *Blockchain {
 }
 
 func (bc *Blockchain) init() {
+	rand.Seed(time.Now().Unix())
 	emptyHash := common.Sha256([]byte{})
 	// create genesis
 	bc.genesis = &Block{
 		Round:      0,
+		Seed:       common.Uint2Bytes(rand.Uint64()),
 		ParentHash: emptyHash,
 		Author:     common.HashToAddr(emptyHash),
 		Time:       time.Now().Unix(),
 	}
+	bc.last = bc.genesis
 }
 
 func (bc *Blockchain) get(hash common.Hash, round uint64) *Block {
@@ -86,14 +108,14 @@ func (bc *Blockchain) getByRound(round uint64) *Block {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 	last := bc.last
-	for round != 0 {
+	for round > 0 {
 		if last.Round == round {
 			return last
 		}
 		last = bc.blocks[round-1][last.ParentHash]
 		round--
 	}
-	return nil
+	return last
 }
 
 func (bc *Blockchain) add(blk *Block) {

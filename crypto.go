@@ -5,9 +5,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"github.com/tinychain/algorand/common"
+	"github.com/tinychain/algorand/vrf"
 	"golang.org/x/crypto/ed25519"
-	rander "math/rand"
-	"time"
 )
 
 type PublicKey struct {
@@ -30,7 +29,8 @@ func (pub *PublicKey) VerifySign(m, sign []byte) error {
 	return nil
 }
 
-func (pub *PublicKey) VerifyVRF(vrf, proof, m []byte) error {
+func (pub *PublicKey) VerifyVRF(proof, m []byte) error {
+	vrf.ECVRF_verify(pub.pk, proof, m)
 	return nil
 }
 
@@ -51,10 +51,12 @@ func (priv *PrivateKey) Sign(m []byte) ([]byte, error) {
 	return append(pubkey, sign...), nil
 }
 
-func (priv *PrivateKey) Evaluate(m []byte) (value, proof []byte) {
-	rander.Seed(time.Now().UnixNano())
-	value, proof = common.Sha256(common.Uint2Bytes(rander.Uint64())).Bytes(),
-		common.Sha256(common.Uint2Bytes(rander.Uint64())).Bytes()
+func (priv *PrivateKey) Evaluate(m []byte) (value, proof []byte, err error) {
+	proof, err = vrf.ECVRF_prove(priv.PublicKey().pk, priv.sk, m)
+	if err != nil {
+		return
+	}
+	value = vrf.ECVRF_proof2hash(proof)
 	return
 }
 
