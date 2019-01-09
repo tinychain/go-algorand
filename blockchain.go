@@ -110,5 +110,7 @@ func (bc *Blockchain) add(blk *Block) {
 }
 
 func (bc *Blockchain) resolveFork(fork *Block) {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
 	bc.last = fork
 }

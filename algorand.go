@@ -135,7 +135,9 @@ func (alg *Algorand) run() {
 			return
 		case <-forkInterval.C:
 			// periodically resolve fork
+			alg.processForkResolve()
 		default:
+			alg.processMain()
 		}
 	}
 
@@ -143,11 +145,12 @@ func (alg *Algorand) run() {
 
 // processMain performs the main processing of algorand algorithm.
 func (alg *Algorand) processMain() {
+	currRound := alg.round() + 1
 	// 1. block proposal
 	block := alg.blockProposal(false)
 
 	// 2. init BA with block with the highest priority.
-	consensusType, block := alg.BA(alg.round()+1, block)
+	consensusType, block := alg.BA(currRound, block)
 
 	// 3. reach consensus on a FINAL or TENTATIVE new block.
 	fmt.Printf("reach consensus %d at round %d, block hash %s", consensusType, currRound, block.Hash())
@@ -160,8 +163,11 @@ func (alg *Algorand) processMain() {
 
 // processForkResolve performs a special algorand processing to resolve fork.
 func (alg *Algorand) processForkResolve() {
+	// propose fork
 	longest := alg.blockProposal(true)
+	// init BA with a highest priority fork
 	_, fork := alg.BA(longest.Round, longest)
+	// commit fork
 	alg.chain.resolveFork(fork)
 }
 
