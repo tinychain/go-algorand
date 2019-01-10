@@ -2,11 +2,14 @@ package main
 
 import "time"
 
+var (
+	UserAmount       uint64 = 100
+	TokenPerUser     uint64 = 1000
+	TotalTokenAmount        = UserAmount * TokenPerUser
+)
+
 const (
 	// Algorand system parameters
-	totalTokenAmount = 10000
-	userAmount       = 100
-	tokenPerNode     = totalTokenAmount / userAmount
 
 	expectedBlockProposers        = 26
 	expectedCommitteeMembers      = 2000
@@ -26,9 +29,8 @@ const (
 	forkResolveInterval = 1 * time.Hour // fork resolve interval time
 
 	// helper const var
-	committee   = "committee"
-	proposer    = "proposer"
-	forkResolve = "forkresolve"
+	committee = "committee"
+	proposer  = "proposer"
 
 	// step
 	PROPOSE       = 1000

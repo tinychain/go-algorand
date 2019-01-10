@@ -40,14 +40,14 @@ func NewAlgorand(id PID) *Algorand {
 	return alg
 }
 
-func (alg *Algorand) start() {
+func (alg *Algorand) Start() {
 	alg.quitCh = make(chan struct{})
 	alg.hangForever = make(chan struct{})
 	alg.peer.start()
 	go alg.run()
 }
 
-func (alg *Algorand) stop() {
+func (alg *Algorand) Stop() {
 	close(alg.quitCh)
 	close(alg.hangForever)
 	alg.peer.stop()
@@ -64,7 +64,7 @@ func (alg *Algorand) lastBlock() *Block {
 
 // weight returns the weight of the given address.
 func (alg *Algorand) weight(address common.Address) uint64 {
-	return tokenPerNode
+	return TokenPerUser
 }
 
 // tokenOwn returns the token amount (weight) owned by self node.
@@ -512,7 +512,7 @@ func maxPriority(vrf []byte, users int) []byte {
 func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 	binomial := &distuv.Binomial{
 		N: float64(weight),
-		P: float64(expectedNum) / float64(totalTokenAmount),
+		P: float64(expectedNum) / float64(TotalTokenAmount),
 	}
 	j := 0
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
