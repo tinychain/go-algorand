@@ -30,11 +30,11 @@ func newPeer(alg *Algorand) *Peer {
 }
 
 func (p *Peer) start() {
-	GetPeerPool().add(p.algorand.peer)
+	GetPeerPool().add(p)
 }
 
 func (p *Peer) stop() {
-	GetPeerPool().remove(p.algorand.peer)
+	GetPeerPool().remove(p)
 }
 
 func (p *Peer) ID() PID {
@@ -42,14 +42,12 @@ func (p *Peer) ID() PID {
 }
 
 func (p *Peer) gossip(typ int, data []byte) {
-	ppool := GetPeerPool()
-
 	// simulate gossiping
-	for _, peer := range ppool.peers {
+	for _, peer := range GetPeerPool().peers {
 		if peer.ID() == p.ID() {
 			continue
 		}
-		p.handle(typ, data)
+		go peer.handle(typ, data)
 	}
 }
 
@@ -64,12 +62,15 @@ func (p *Peer) handle(typ int, data []byte) error {
 		p.pmu.RLock()
 		maxProposal := p.maxProposals[bp.Round]
 		p.pmu.RUnlock()
-		if (typ == BLOCK_PROPOSAL && bp.Prior <= maxProposal.Prior) ||
-			(typ == FORK_PROPOSAL && bp.Round <= maxProposal.Round) {
-			return nil
+		if maxProposal != nil {
+			if (typ == BLOCK_PROPOSAL && bytes.Compare(bp.Prior, maxProposal.Prior) <= 0) ||
+				(typ == FORK_PROPOSAL && bp.Round <= maxProposal.Round) {
+				return nil
+			}
 		}
 		if err := bp.Verify(p.algorand.weight(bp.Address()), constructSeed(p.algorand.sortitionSeed(bp.Round), role(proposer, bp.Round, PROPOSE)));
 			err != nil {
+			log.Errorf("block proposal verification failed, %s", err)
 			return err
 		}
 		p.setMaxProposal(bp.Round, bp)
@@ -93,8 +94,18 @@ func (p *Peer) handle(typ int, data []byte) error {
 
 // iterator returns the iterator of incoming messages queue.
 func (p *Peer) voteIterator(round uint64, step int) *Iterator {
+	key := constructVoteKey(round, step)
+	p.vmu.RLock()
+	list, ok := p.incomingVotes[key]
+	p.vmu.RUnlock()
+	if !ok {
+		list = newList()
+		p.vmu.Lock()
+		p.incomingVotes[key] = list
+		p.vmu.Unlock()
+	}
 	return &Iterator{
-		list: p.incomingVotes[constructVoteKey(round, step)],
+		list: list,
 	}
 }
 
@@ -123,6 +134,7 @@ func (p *Peer) addBlock(hash common.Hash, blk *Block) {
 func (p *Peer) setMaxProposal(round uint64, proposal *Proposal) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	//log.Infof("node %d set max proposal #%d %s", p.ID(), proposal.Round, proposal.Hash)
 	p.maxProposals[round] = proposal
 }
 

@@ -82,7 +82,6 @@ func (alg *Algorand) vrfSeed(round uint64) (seed, proof []byte, err error) {
 			// vrf-based seed
 			pubkey := recoverPubkey(lastBlock.Signature)
 			m := bytes.Join([][]byte{lastParentBlock.Seed, common.Uint2Bytes(lastBlock.Round)}, nil)
-
 			err = pubkey.VerifyVRF(lastBlock.Proof, m)
 		} else if bytes.Compare(lastBlock.Seed, common.Sha256(
 			bytes.Join([][]byte{
@@ -187,6 +186,7 @@ func (alg *Algorand) proposeBlock() *Block {
 	bhash := blk.Hash()
 	sign, _ := alg.privkey.Sign(bhash.Bytes())
 	blk.Signature = sign
+	log.Infof("node %d propose a new block #%d %s", alg.id, blk.Round, blk.Hash())
 	return blk
 }
 
@@ -201,14 +201,8 @@ func (alg *Algorand) proposeFork() *Block {
 
 // blockProposal performs the block proposal procedure.
 func (alg *Algorand) blockProposal(resolveFork bool) *Block {
-	var iden string
-	if !resolveFork {
-		iden = proposer
-	} else {
-		iden = forkResolve
-	}
 	round := alg.round() + 1
-	vrf, proof, subusers := alg.sortition(alg.sortitionSeed(round), role(iden, round, PROPOSE), expectedBlockProposers, alg.tokenOwn())
+	vrf, proof, subusers := alg.sortition(alg.sortitionSeed(round), role(proposer, round, PROPOSE), expectedBlockProposers, alg.tokenOwn())
 	// have been selected.
 	log.Infof("node %d get %d sub-users in block proposal", alg.id, subusers)
 	if subusers > 0 {
@@ -254,6 +248,7 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 	for {
 		select {
 		case <-timeoutForBlockFlying.C:
+			// empty block
 			return &Block{
 				Round:      round,
 				ParentHash: alg.lastBlock().Hash(),
@@ -497,18 +492,12 @@ func role(iden string, round uint64, step int) []byte {
 	}, nil)
 }
 
-// priority returns the priority of block proposal.
-// The parameter `vrf` is the hash output of VRF, and `index` is the sub-users' index.
-func priority(vrf []byte, index int) uint32 {
-	data := common.Sha256(bytes.Join([][]byte{vrf, common.Uint2Bytes(uint64(index))}, nil))
-	return uint32(new(big.Int).SetBytes(data.Bytes()).Uint64())
-}
-
-func maxPriority(vrf []byte, users int) uint32 {
-	var maxPrior uint32
+// maxPriority returns the highest priority of block proposal.
+func maxPriority(vrf []byte, users int) []byte {
+	var maxPrior []byte
 	for i := 1; i <= users; i++ {
-		prior := priority(vrf, i)
-		if prior > maxPrior {
+		prior := common.Sha256(bytes.Join([][]byte{vrf, common.Uint2Bytes(uint64(i))}, nil)).Bytes()
+		if bytes.Compare(prior, maxPrior) > 0 {
 			maxPrior = prior
 		}
 	}
@@ -524,10 +513,11 @@ func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 	j := 0
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
 	hashBig := new(big.Float).SetInt(new(big.Int).SetBytes(vrf))
-	maxHash := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0)))
+	maxHash := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength*8), big.NewInt(0)))
 	for uint64(j) <= weight {
 		lower := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j))), maxHash)
 		upper := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j+1))), maxHash)
+		//log.Infof("hashBig is %v, 2^hashlen %v, lower bound %f, upper bound %f", hb, maxH, fl, fu)
 		if hashBig.Cmp(lower) >= 0 && hashBig.Cmp(upper) < 0 {
 			break
 		}

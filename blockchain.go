@@ -91,7 +91,7 @@ func (bc *Blockchain) init() {
 		Author:     common.HashToAddr(emptyHash),
 		Time:       time.Now().Unix(),
 	}
-	bc.last = bc.genesis
+	bc.add(bc.genesis)
 }
 
 func (bc *Blockchain) get(hash common.Hash, round uint64) *Block {
@@ -112,7 +112,7 @@ func (bc *Blockchain) getByRound(round uint64) *Block {
 		if last.Round == round {
 			return last
 		}
-		last = bc.blocks[round-1][last.ParentHash]
+		last = bc.get(last.ParentHash, round-1)
 		round--
 	}
 	return last
@@ -126,7 +126,8 @@ func (bc *Blockchain) add(blk *Block) {
 		blocks = make(map[common.Hash]*Block)
 	}
 	blocks[blk.Hash()] = blk
-	if blk.Round > bc.last.Round {
+	bc.blocks[blk.Round] = blocks
+	if bc.last == nil || blk.Round > bc.last.Round {
 		bc.last = blk
 	}
 }

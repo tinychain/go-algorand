@@ -12,7 +12,7 @@ func main() {
 		nodes = append(nodes, node)
 	}
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(20 * time.Second)
 	for {
 		select {
 		case <-ticker.C:

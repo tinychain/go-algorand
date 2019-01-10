@@ -9,7 +9,7 @@ import (
 
 const (
 	// message type
-	VOTE = iota
+	VOTE           = iota
 	BLOCK_PROPOSAL
 	FORK_PROPOSAL
 	BLOCK
@@ -69,8 +69,8 @@ func (v *VoteMessage) RecoverPubkey() *PublicKey {
 type Proposal struct {
 	Round  uint64      `json:"round"`
 	Hash   common.Hash `json:"hash"`
-	Prior  uint32      `json:"prior"`
-	VRF    []byte      `json:"vrf"`
+	Prior  []byte      `json:"prior"`
+	VRF    []byte      `json:"vrf"` // vrf of user's sortition hash
 	Proof  []byte      `json:"proof"`
 	Pubkey []byte      `json:"public_key"`
 }
@@ -100,7 +100,7 @@ func (b *Proposal) Verify(weight uint64, m []byte) error {
 
 	// verify priority
 	subusers := subUsers(expectedBlockProposers, weight, b.VRF)
-	if maxPriority(b.VRF, subusers) != b.Prior {
+	if bytes.Compare(maxPriority(b.VRF, subusers), b.Prior) != 0 {
 		return errors.New("max priority mismatch")
 	}
 
