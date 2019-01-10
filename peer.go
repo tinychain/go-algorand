@@ -25,7 +25,16 @@ func newPeer(alg *Algorand) *Peer {
 		algorand:      alg,
 		incomingVotes: make(map[string]*List),
 		blocks:        make(map[common.Hash]*Block),
+		maxProposals:  make(map[uint64]*Proposal),
 	}
+}
+
+func (p *Peer) start() {
+	GetPeerPool().add(p.algorand.peer)
+}
+
+func (p *Peer) stop() {
+	GetPeerPool().remove(p.algorand.peer)
 }
 
 func (p *Peer) ID() PID {

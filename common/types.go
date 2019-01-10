@@ -24,7 +24,7 @@ func BigToHash(b *big.Int) Hash { return BytesToHash(b.Bytes()) }
 func HexToHash(s string) Hash { return BytesToHash(FromHex(s)) }
 
 func (h Hash) String() string {
-	return string(h[:])
+	return h.Hex()
 }
 
 func (h Hash) Bytes() []byte {

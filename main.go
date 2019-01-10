@@ -4,10 +4,6 @@ import (
 	"time"
 )
 
-const (
-	userAmount = 10
-)
-
 func main() {
 	var nodes []*Algorand
 	for i := 1; i <= userAmount; i++ {

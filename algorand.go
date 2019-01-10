@@ -41,13 +41,13 @@ func NewAlgorand(id PID) *Algorand {
 
 func (alg *Algorand) start() {
 	alg.quitCh = make(chan struct{})
-	GetPeerPool().add(alg.peer)
+	alg.peer.start()
 	go alg.run()
 }
 
 func (alg *Algorand) stop() {
 	close(alg.quitCh)
-	GetPeerPool().remove(alg.peer)
+	alg.peer.stop()
 }
 
 // round returns the latest round number.
@@ -210,8 +210,8 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 	round := alg.round() + 1
 	vrf, proof, subusers := alg.sortition(alg.sortitionSeed(round), role(iden, round, PROPOSE), expectedBlockProposers, alg.tokenOwn())
 	// have been selected.
+	log.Infof("node %d get %d sub-users in block proposal", alg.id, subusers)
 	if subusers > 0 {
-		log.Debugf("node %d has %d sub-users selected as block proposer", alg.id, subusers)
 		var (
 			newBlk       *Block
 			proposalType int
@@ -260,7 +260,11 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 			}
 		case <-ticker.C:
 			// get the block with the highest priority
-			bhash := alg.peer.getMaxProposal(round).Hash
+			pp := alg.peer.getMaxProposal(round)
+			if pp == nil {
+				continue
+			}
+			bhash := pp.Hash
 			blk := alg.peer.getBlock(bhash)
 			if blk != nil {
 				return blk
@@ -521,12 +525,16 @@ func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
 	hashBig := new(big.Float).SetInt(new(big.Int).SetBytes(vrf))
 	maxHash := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength), big.NewInt(0)))
-	for {
+	for uint64(j) <= weight {
 		lower := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j))), maxHash)
 		upper := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j+1))), maxHash)
 		if hashBig.Cmp(lower) >= 0 && hashBig.Cmp(upper) < 0 {
 			break
 		}
+		j++
+	}
+	if uint64(j) > weight {
+		j = 0
 	}
 	return j
 }
