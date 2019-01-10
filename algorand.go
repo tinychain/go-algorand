@@ -22,9 +22,10 @@ type Algorand struct {
 	privkey *PrivateKey
 	pubkey  *PublicKey
 
-	chain  *Blockchain
-	peer   *Peer
-	quitCh chan struct{}
+	chain       *Blockchain
+	peer        *Peer
+	quitCh      chan struct{}
+	hangForever chan struct{}
 }
 
 func NewAlgorand(id PID) *Algorand {
@@ -41,12 +42,14 @@ func NewAlgorand(id PID) *Algorand {
 
 func (alg *Algorand) start() {
 	alg.quitCh = make(chan struct{})
+	alg.hangForever = make(chan struct{})
 	alg.peer.start()
 	go alg.run()
 }
 
 func (alg *Algorand) stop() {
 	close(alg.quitCh)
+	close(alg.hangForever)
 	alg.peer.stop()
 }
 
@@ -101,6 +104,13 @@ func (alg *Algorand) vrfSeed(round uint64) (seed, proof []byte, err error) {
 	return
 }
 
+func (alg *Algorand) emptyBlock(round uint64, prevHash common.Hash) *Block {
+	return &Block{
+		Round:      round,
+		ParentHash: prevHash,
+	}
+}
+
 // sortitionSeed returns the selection seed with a refresh interval R.
 func (alg *Algorand) sortitionSeed(round uint64) []byte {
 	realR := round - 1
@@ -120,6 +130,9 @@ func (alg *Algorand) Address() common.Address {
 
 // run performs the all procedures of Algorand algorithm in infinite loop.
 func (alg *Algorand) run() {
+	// sleep 1 millisecond for all peers ready.
+	time.Sleep(1 * time.Millisecond)
+
 	forkInterval := time.NewTicker(forkResolveInterval)
 
 	// propose block
@@ -192,11 +205,7 @@ func (alg *Algorand) proposeBlock() *Block {
 
 func (alg *Algorand) proposeFork() *Block {
 	longest := alg.lastBlock()
-	empty := &Block{
-		Round:      alg.round() + 1,
-		ParentHash: longest.Hash(),
-	}
-	return empty
+	return alg.emptyBlock(alg.round()+1, longest.Hash())
 }
 
 // blockProposal performs the block proposal procedure.
@@ -218,10 +227,7 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 			proposalType = FORK_PROPOSAL
 		}
 		if newBlk == nil {
-			return &Block{
-				Round:      round,
-				ParentHash: alg.lastBlock().Hash(),
-			}
+			return alg.emptyBlock(round, alg.lastBlock().Hash())
 		}
 		proposal := &Proposal{
 			Round:  newBlk.Round,
@@ -232,6 +238,7 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 			Pubkey: alg.pubkey.Bytes(),
 		}
 		alg.peer.setMaxProposal(round, proposal)
+		alg.peer.addBlock(newBlk.Hash(), newBlk)
 		blkMsg, _ := newBlk.Serialize()
 		proposalMsg, _ := proposal.Serialize()
 		go alg.peer.gossip(BLOCK, blkMsg)
@@ -244,23 +251,19 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 
 	// timeout for block gossiping.
 	timeoutForBlockFlying := time.NewTimer(lamdaBlock)
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	for {
 		select {
 		case <-timeoutForBlockFlying.C:
 			// empty block
-			return &Block{
-				Round:      round,
-				ParentHash: alg.lastBlock().Hash(),
-			}
+			return alg.emptyBlock(round, alg.lastBlock().Hash())
 		case <-ticker.C:
 			// get the block with the highest priority
 			pp := alg.peer.getMaxProposal(round)
 			if pp == nil {
 				continue
 			}
-			bhash := pp.Hash
-			blk := alg.peer.getBlock(bhash)
+			blk := alg.peer.getBlock(pp.Hash)
 			if blk != nil {
 				return blk
 			}
@@ -320,10 +323,7 @@ func (alg *Algorand) BA(round uint64, block *Block) (int8, *Block) {
 	r, _ := alg.countVotes(round, FINAL, finalThreshold, expectedFinalCommitteeMembers, lamdaStep)
 	if prevHash := alg.lastBlock().Hash(); hash == emptyHash(round, prevHash) {
 		// empty block
-		newBlk = &Block{
-			Round:      round,
-			ParentHash: prevHash,
-		}
+		newBlk = alg.emptyBlock(round, prevHash)
 	} else {
 		newBlk = alg.peer.getBlock(hash)
 	}
@@ -369,6 +369,9 @@ func (alg *Algorand) binaryBA(round uint64, hash common.Hash) common.Hash {
 		err  error
 	)
 	empty := emptyHash(round, alg.chain.last.Hash())
+	defer func() {
+		log.Infof("node %d complete binaryBA with %d steps", alg.id, step)
+	}()
 	for step < MAXSTEPS {
 		alg.committeeVote(round, step, expectedCommitteeMembers, r)
 		r, err = alg.countVotes(round, step, thresholdOfBAStep, expectedCommitteeMembers, lamdaStep)
@@ -408,8 +411,9 @@ func (alg *Algorand) binaryBA(round uint64, hash common.Hash) common.Hash {
 		}
 	}
 
+	log.Infof("reach the maxstep hang forever")
 	// hang forever
-	<-make(chan struct{})
+	<-alg.hangForever
 	return common.Hash{}
 }
 

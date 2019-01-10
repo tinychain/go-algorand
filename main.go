@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/tinychain/algorand/common"
 	"time"
 )
 
@@ -21,13 +22,20 @@ func main() {
 	}
 }
 
+type meta struct {
+	round uint64
+	hash  common.Hash
+}
+
 func printChainInfo(nodes []*Algorand) {
-	chains := make(map[uint64][]PID)
+	chains := make(map[meta][]PID)
 	for _, node := range nodes {
-		chains[node.chain.last.Round] = append(chains[node.chain.last.Round], node.id)
+		last := node.chain.last
+		key := meta{last.Round, last.Hash()}
+		chains[key] = append(chains[key], node.id)
 	}
 
-	for round, pids := range chains {
-		log.Infof("%d nodes reach consensus on chain round %d", len(pids), round)
+	for meta, pids := range chains {
+		log.Infof("%d nodes reach consensus on chain round %d, hash %s", len(pids), meta.round, meta.hash)
 	}
 }

@@ -42,8 +42,9 @@ func (p *Peer) ID() PID {
 }
 
 func (p *Peer) gossip(typ int, data []byte) {
+	peers := GetPeerPool().getPeers()
 	// simulate gossiping
-	for _, peer := range GetPeerPool().peers {
+	for _, peer := range peers {
 		if peer.ID() == p.ID() {
 			continue
 		}
@@ -219,4 +220,14 @@ func (pool *PeerPool) remove(peer *Peer) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	delete(pool.peers, peer.ID())
+}
+
+func (pool *PeerPool) getPeers() []*Peer {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	var peers []*Peer
+	for _, peer := range pool.peers {
+		peers = append(peers, peer)
+	}
+	return peers
 }

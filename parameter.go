@@ -5,7 +5,7 @@ import "time"
 const (
 	// Algorand system parameters
 	totalTokenAmount = 10000
-	userAmount       = 30
+	userAmount       = 100
 	tokenPerNode     = totalTokenAmount / userAmount
 
 	expectedBlockProposers        = 26
