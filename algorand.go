@@ -3,9 +3,10 @@ package main
 import (
 	"bytes"
 	"errors"
+	"github.com/rcrowley/go-metrics"
 	"github.com/tinychain/algorand/common"
-	"gonum.org/v1/gonum/stat/distuv"
 	"math/big"
+	"math/rand"
 	"time"
 )
 
@@ -13,11 +14,18 @@ var (
 	log = common.GetLogger("algorand")
 
 	errCountVotesTimeout = errors.New("count votes timeout")
+
+	// global metrics
+	metricsRound              uint64 = 1
+	proposerSelectedCounter          = metrics.NewRegisteredCounter("blockproposal/subusers/count", nil)
+	proposerSelectedHistogram        = metrics.NewRegisteredHistogram("blockproposal/subusers", nil, metrics.NewUniformSample(1028))
 )
 
 type PID int
 
 type Algorand struct {
+	maliciousType int // true: honest user; false: malicious user.
+
 	id      PID
 	privkey *PrivateKey
 	pubkey  *PublicKey
@@ -26,15 +34,19 @@ type Algorand struct {
 	peer        *Peer
 	quitCh      chan struct{}
 	hangForever chan struct{}
+
+	// metrics
 }
 
-func NewAlgorand(id PID) *Algorand {
+func NewAlgorand(id PID, maliciousType int) *Algorand {
+	rand.Seed(time.Now().UnixNano())
 	pub, priv, _ := NewKeyPair()
 	alg := &Algorand{
-		id:      id,
-		privkey: priv,
-		pubkey:  pub,
-		chain:   newBlockchain(),
+		maliciousType: maliciousType,
+		id:            id,
+		privkey:       priv,
+		pubkey:        pub,
+		chain:         newBlockchain(),
 	}
 	alg.peer = newPeer(alg)
 	return alg
@@ -152,26 +164,35 @@ func (alg *Algorand) run() {
 
 // processMain performs the main processing of algorand algorithm.
 func (alg *Algorand) processMain() {
+	if metricsRound == alg.round() {
+		proposerSelectedHistogram.Update(proposerSelectedCounter.Count())
+		proposerSelectedCounter.Clear()
+		metricsRound = alg.round() + 1
+	}
 	currRound := alg.round() + 1
-	log.Infof("node %d begin to perform consensus at round %d", alg.id, currRound)
+	//log.Infof("node %d begin to perform consensus at round %d", alg.id, currRound)
 	// 1. block proposal
 	block := alg.blockProposal(false)
-	log.Debugf("node %d init BA with block #%d %s", alg.id, block.Round, block.Hash())
+	//log.Debugf("node %d init BA with block #%d %s, is empty? %v", alg.id, block.Round, block.Hash(), block.Signature == nil)
 
 	// 2. init BA with block with the highest priority.
 	consensusType, block := alg.BA(currRound, block)
 
 	// 3. reach consensus on a FINAL or TENTATIVE new block.
-	log.Infof("node %d reach consensus %d at round %d, block hash %s", alg.id, consensusType, currRound, block.Hash())
+	log.Infof("node %d reach consensus %d at round %d, block hash %s, is empty? %v", alg.id, consensusType, currRound, block.Hash(), block.Signature == nil)
 
 	// 4. append to the chain.
 	alg.chain.add(block)
-
 	// TODO: 5. clear cache
 }
 
 // processForkResolve performs a special algorand processing to resolve fork.
 func (alg *Algorand) processForkResolve() {
+	if metricsRound == alg.round() {
+		proposerSelectedHistogram.Update(proposerSelectedCounter.Count())
+		proposerSelectedCounter.Clear()
+		metricsRound = alg.round() + 1
+	}
 	// propose fork
 	longest := alg.blockProposal(true)
 	// init BA with a highest priority fork
@@ -186,8 +207,11 @@ func (alg *Algorand) proposeBlock() *Block {
 
 	seed, proof, err := alg.vrfSeed(currRound)
 	if err != nil {
-		return nil
+		return alg.emptyBlock(currRound, alg.lastBlock().Hash())
 	}
+
+	// random data field to simulate different version of block.
+	randomData := common.Uint2Bytes(rand.Uint64())
 	blk := &Block{
 		Round:      currRound,
 		Seed:       seed,
@@ -195,6 +219,7 @@ func (alg *Algorand) proposeBlock() *Block {
 		Author:     alg.pubkey.Address(),
 		Time:       time.Now().Unix(),
 		Proof:      proof,
+		Data:       randomData,
 	}
 	bhash := blk.Hash()
 	sign, _ := alg.privkey.Sign(bhash.Bytes())
@@ -213,12 +238,14 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 	round := alg.round() + 1
 	vrf, proof, subusers := alg.sortition(alg.sortitionSeed(round), role(proposer, round, PROPOSE), expectedBlockProposers, alg.tokenOwn())
 	// have been selected.
-	log.Infof("node %d get %d sub-users in block proposal", alg.id, subusers)
+	//log.Infof("node %d get %d sub-users in block proposal", alg.id, subusers)
 	if subusers > 0 {
+		proposerSelectedCounter.Inc(1)
 		var (
 			newBlk       *Block
 			proposalType int
 		)
+
 		if !resolveFork {
 			newBlk = alg.proposeBlock()
 			proposalType = BLOCK_PROPOSAL
@@ -226,9 +253,7 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 			newBlk = alg.proposeFork()
 			proposalType = FORK_PROPOSAL
 		}
-		if newBlk == nil {
-			return alg.emptyBlock(round, alg.lastBlock().Hash())
-		}
+
 		proposal := &Proposal{
 			Round:  newBlk.Round,
 			Hash:   newBlk.Hash(),
@@ -241,8 +266,28 @@ func (alg *Algorand) blockProposal(resolveFork bool) *Block {
 		alg.peer.addBlock(newBlk.Hash(), newBlk)
 		blkMsg, _ := newBlk.Serialize()
 		proposalMsg, _ := proposal.Serialize()
-		go alg.peer.gossip(BLOCK, blkMsg)
-		go alg.peer.gossip(proposalType, proposalMsg)
+		if alg.maliciousType == EvilBlockProposal && !resolveFork {
+			go alg.peer.halfGossip(BLOCK, blkMsg, 0)
+			go alg.peer.halfGossip(proposalType, proposalMsg, 0)
+
+			// gossip another version of block to the remaining half peers.
+			newBlk = alg.proposeBlock()
+			proposal = &Proposal{
+				Round:  newBlk.Round,
+				Hash:   newBlk.Hash(),
+				Prior:  maxPriority(vrf, subusers),
+				VRF:    vrf,
+				Proof:  proof,
+				Pubkey: alg.pubkey.Bytes(),
+			}
+			blkMsg, _ = newBlk.Serialize()
+			proposalMsg, _ = proposal.Serialize()
+			go alg.peer.halfGossip(BLOCK, blkMsg, 1)
+			go alg.peer.halfGossip(proposalType, proposalMsg, 1)
+		} else {
+			go alg.peer.gossip(BLOCK, blkMsg)
+			go alg.peer.gossip(proposalType, proposalMsg)
+		}
 	}
 
 	// wait for λstepvar + λpriority time to identify the highest priority.
@@ -289,6 +334,11 @@ func (alg *Algorand) verifySort(vrf, proof, seed, role []byte, expectedNum int) 
 
 // committeeVote votes for `value`.
 func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash common.Hash) error {
+	if alg.maliciousType == EvilVoteNothing {
+		// vote nothing
+		return nil
+	}
+
 	role := role(committee, round, step)
 	vrf, proof, j := alg.sortition(alg.sortitionSeed(round), role, expectedNum, alg.tokenOwn())
 
@@ -317,9 +367,18 @@ func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash
 
 // BA runs BA* for the next round, with a proposed block.
 func (alg *Algorand) BA(round uint64, block *Block) (int8, *Block) {
-	var newBlk *Block
-	hash := alg.reduction(round, block.Hash())
-	hash = alg.binaryBA(round, hash)
+	var (
+		newBlk *Block
+		hash   common.Hash
+	)
+	if alg.maliciousType == EvilVoteEmpty {
+		hash = emptyHash(round, block.ParentHash)
+		alg.reduction(round, hash)
+		hash = alg.binaryBA(round, hash)
+	} else {
+		hash = alg.reduction(round, block.Hash())
+		hash = alg.binaryBA(round, hash)
+	}
 	r, _ := alg.countVotes(round, FINAL, finalThreshold, expectedFinalCommitteeMembers, lamdaStep)
 	if prevHash := alg.lastBlock().Hash(); hash == emptyHash(round, prevHash) {
 		// empty block
@@ -510,19 +569,17 @@ func maxPriority(vrf []byte, users int) []byte {
 
 // subUsers return the selected amount of sub-users determined from the mathematics protocol.
 func subUsers(expectedNum int, weight uint64, vrf []byte) int {
-	binomial := &distuv.Binomial{
-		N: float64(weight),
-		P: float64(expectedNum) / float64(TotalTokenAmount),
-	}
+	binomial := NewBinomial(int64(weight), int64(expectedNum), int64(TotalTokenAmount()))
 	j := 0
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
-	hashBig := new(big.Float).SetInt(new(big.Int).SetBytes(vrf))
-	maxHash := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength*8), big.NewInt(0)))
+	hashBig := new(big.Int).SetBytes(vrf)
+	maxHash := new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength*8), nil)
+	hash := new(big.Rat).SetFrac(hashBig, maxHash)
 	for uint64(j) <= weight {
-		lower := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j))), maxHash)
-		upper := new(big.Float).Mul(big.NewFloat(binomial.CDF(float64(j+1))), maxHash)
-		//log.Infof("hashBig is %v, 2^hashlen %v, lower bound %f, upper bound %f", hb, maxH, fl, fu)
-		if hashBig.Cmp(lower) >= 0 && hashBig.Cmp(upper) < 0 {
+		lower := binomial.CDF(int64(j))
+		upper := binomial.CDF(int64(j + 1))
+		//log.Infof("hash %v, lower %v , upper %v", hash.Sign(), lower.Sign(), upper.Sign())
+		if hash.Cmp(lower) >= 0 && hash.Cmp(upper) < 0 {
 			break
 		}
 		j++

@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/tinychain/algorand/common"
-	"math/rand"
 	"sync"
-	"time"
 )
 
 type Block struct {
@@ -18,6 +16,7 @@ type Block struct {
 	Time        int64          `json:"time"`         // block timestamp
 	Seed        []byte         `json:"seed"`         // vrf-based seed for next round
 	Proof       []byte         `json:"proof"`        // proof of vrf-based seed
+	Data        []byte         `json:"data"`         // data field, simulate for transactions
 
 	// don't induce in hash
 	Type      int8   `json:"type"`      // `FINAL` or `TENTATIVE`
@@ -81,15 +80,13 @@ func newBlockchain() *Blockchain {
 }
 
 func (bc *Blockchain) init() {
-	rand.Seed(time.Now().Unix())
 	emptyHash := common.Sha256([]byte{})
 	// create genesis
 	bc.genesis = &Block{
 		Round:      0,
-		Seed:       common.Uint2Bytes(rand.Uint64()),
+		Seed:       emptyHash.Bytes(),
 		ParentHash: emptyHash,
 		Author:     common.HashToAddr(emptyHash),
-		Time:       time.Now().Unix(),
 	}
 	bc.add(bc.genesis)
 }

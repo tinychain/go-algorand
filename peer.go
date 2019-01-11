@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"github.com/tinychain/algorand/common"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 var peerPool *PeerPool
@@ -47,6 +49,35 @@ func (p *Peer) gossip(typ int, data []byte) {
 	for _, peer := range peers {
 		if peer.ID() == p.ID() {
 			continue
+		}
+		if NetworkLatency != 0 {
+			time.Sleep(time.Duration(rand.Intn(NetworkLatency)) * time.Millisecond)
+		}
+		go peer.handle(typ, data)
+	}
+}
+
+// halfGossip gossips the message to a half of remote peers it observes.
+// This gossip will be used by block proposal malicious users.
+func (p *Peer) halfGossip(typ int, data []byte, half int) {
+	if half > 1 {
+		return
+	}
+	peers := GetPeerPool().getPeers()
+	var begin, end int
+	begin = len(peers) / 2 * half
+	if half == 0 {
+		end = len(peers) / 2
+	} else {
+		end = len(peers)
+	}
+	for ; begin < end; begin++ {
+		peer := peers[begin]
+		if peer.ID() == p.ID() {
+			continue
+		}
+		if NetworkLatency != 0 {
+			time.Sleep(time.Duration(rand.Intn(NetworkLatency)) * time.Millisecond)
 		}
 		go peer.handle(typ, data)
 	}

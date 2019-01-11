@@ -19,14 +19,14 @@ func initApp() *cli.App {
 	app := cli.NewApp()
 	app.Name = "Algorand demo"
 	app.Version = "0.1"
-	app.Author = "yyh1102"
+	app.Author = "LowesYang"
 	app.Usage = "Algorand simulation demo for different scenario."
 
 	app.Commands = []cli.Command{
 		{
 			Name:    "regular",
 			Aliases: []string{"r"},
-			Usage:   "run regular process of Algorand algorithm",
+			Usage:   "run regular Algorand algorithm",
 			Action:  regularRun,
 			Flags: []cli.Flag{
 				cli.Uint64Flag{
@@ -42,12 +42,17 @@ func initApp() *cli.App {
 				cli.Uint64Flag{
 					Name:  "malicious,m",
 					Value: 0,
-					Usage: "amount of malicious users",
+					Usage: "amount of malicious users. Malicious user will use default strategy.",
+				},
+				cli.IntFlag{
+					Name:  "mtype,mt",
+					Value: 0,
+					Usage: "malicious type: 0 Honest, 1 block proposal misbehaving; 2 vote empty block in BA*; 3 vote nothing",
 				},
 				cli.IntFlag{
 					Name:  "latency,l",
 					Value: 0,
-					Usage: "network latency",
+					Usage: "max network latency(milliseconds). Each user will simulate a random latency between 0 and ${value}",
 				},
 			},
 		},
@@ -57,14 +62,24 @@ func initApp() *cli.App {
 }
 
 func regularRun(c *cli.Context) {
-	userAmount := c.Uint64("num")
-	tokenPerUser := c.Uint64("token")
-	UserAmount = userAmount
-	TokenPerUser = tokenPerUser
+	UserAmount = c.Uint64("num")
+	TokenPerUser = c.Uint64("token")
+	Malicious = c.Uint64("malicious")
+	NetworkLatency = c.Int("latency")
+	maliciousType := c.Int("type")
 
-	var nodes []*Algorand
-	for i := 1; uint64(i) <= userAmount; i++ {
-		node := NewAlgorand(PID(i))
+	var (
+		nodes []*Algorand
+		i     = 0
+	)
+	for ; uint64(i) <= UserAmount-Malicious; i++ {
+		node := NewAlgorand(PID(i), Honest)
+		go node.Start()
+		nodes = append(nodes, node)
+	}
+
+	for ; uint64(i) <= UserAmount; i++ {
+		node := NewAlgorand(PID(i), maliciousType)
 		go node.Start()
 		nodes = append(nodes, node)
 	}
@@ -94,4 +109,7 @@ func printChainInfo(nodes []*Algorand) {
 	for meta, pids := range chains {
 		log.Infof("%d nodes reach consensus on chain round %d, hash %s", len(pids), meta.round, meta.hash)
 	}
+
+	snapshot := proposerSelectedHistogram.Snapshot()
+	log.Infof("average selected user number in block proposal is %v", snapshot.Mean())
 }

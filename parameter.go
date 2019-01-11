@@ -3,10 +3,13 @@ package main
 import "time"
 
 var (
-	UserAmount       uint64 = 100
-	TokenPerUser     uint64 = 1000
-	TotalTokenAmount        = UserAmount * TokenPerUser
+	UserAmount     uint64 = 100
+	TokenPerUser   uint64 = 10000
+	Malicious      uint64 = 0
+	NetworkLatency        = 0
 )
+
+func TotalTokenAmount() uint64 { return UserAmount * TokenPerUser }
 
 const (
 	// Algorand system parameters
@@ -40,4 +43,10 @@ const (
 
 	FINAL_CONSENSUS     = 0
 	TENTATIVE_CONSENSUS = 1
+
+	// Malicious type
+	Honest = iota
+	EvilBlockProposal
+	EvilVoteEmpty
+	EvilVoteNothing
 )
