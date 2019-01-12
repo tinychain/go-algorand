@@ -45,7 +45,7 @@ func initApp() *cli.App {
 					Usage: "amount of malicious users. Malicious user will use default strategy.",
 				},
 				cli.IntFlag{
-					Name:  "mtype,mt",
+					Name:  "mtype,i",
 					Value: 0,
 					Usage: "malicious type: 0 Honest, 1 block proposal misbehaving; 2 vote empty block in BA*; 3 vote nothing",
 				},

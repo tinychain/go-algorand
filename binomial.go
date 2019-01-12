@@ -2,64 +2,208 @@ package main
 
 import (
 	"math/big"
+	"sync/atomic"
+	"sync"
+	"runtime"
+	"math"
 )
 
-type Binomial struct {
-	N *big.Int
-	P *big.Rat
+var (
+	bigZero = big.NewInt(0)
+	bigOne  = big.NewInt(1)
+	ratZero = big.NewRat(0, 1)
+	ratOne  = big.NewRat(1, 1)
+)
 
-	probCache map[int64]*big.Rat
+type Binomial interface {
+	CDF(int64) *big.Rat
+	Prob(int64) *big.Rat
 }
 
-func NewBinomial(n, pn, pd int64) *Binomial {
-	return &Binomial{
-		N:         big.NewInt(n),
-		P:         big.NewRat(pn, pd),
-		probCache: make(map[int64]*big.Rat),
+// ApproxBinomial is an approximate distribution function of Binomial distribution.
+// It can only be used when τ >>> W (when p = τ / W ).
+type ApproxBinomial struct {
+	expected  *big.Int
+	N         uint64
+	probCache sync.Map //map[int64]*big.Rat
+}
+
+func NewApproxBinomial(expected int64, n uint64) *ApproxBinomial {
+	return &ApproxBinomial{
+		expected: big.NewInt(expected),
+		N:        n,
 	}
 }
 
-func (b *Binomial) CDF(j int64) *big.Rat {
-	if j > b.N.Int64() {
-		return new(big.Rat).SetInt64(1)
+func (ab *ApproxBinomial) CDF(k int64) *big.Rat {
+	if k < 0 {
+		return ratZero
 	}
-
-	k := int64(0)
+	if uint64(k) >= ab.N {
+		return ratOne
+	}
+	j := int64(0)
 	res := new(big.Rat).SetInt64(0)
-	for k <= j {
-		prob := b.prob(k)
-		res = res.Add(res, prob)
-		k++
+	for j <= k {
+		res.Add(res, ab.Prob(j))
+		j++
 	}
 	return res
 }
 
-func (b *Binomial) prob(k int64) *big.Rat {
-	if prob, exist := b.probCache[k]; exist {
-		return prob
+func (ab *ApproxBinomial) Prob(k int64) *big.Rat {
+	if prob, exist := ab.probCache.Load(k); exist {
+		return prob.(*big.Rat)
 	}
-	numer := b.P.Num()   // pn
-	denom := b.P.Denom() // pd
+	numer := new(big.Int).Exp(ab.expected, big.NewInt(k), nil)
+	denom := new(big.Int).MulRange(1, k)
+	e := new(big.Rat).SetFloat64(math.Pow(math.E, -float64(ab.expected.Int64())))
+	lval := new(big.Rat).SetFrac(numer, denom)
 
-	bk := big.NewInt(k)              // k
-	sbk := new(big.Int).Sub(b.N, bk) // n-k
+	prob := lval.Mul(lval, e)
+	ab.probCache.Store(k, prob)
+	return prob
+}
+
+// Binomial implements the binomial distribution function.
+// It's too slow!!!
+type RegularBinomial struct {
+	N *big.Int
+
+	pn *big.Int // numerator of P
+	pd *big.Int // denominator of P
+
+	pnExpCache    sync.Map // map[power(int64)]*big.Int
+	tpnExpCache   sync.Map // the same with above
+	probCache     sync.Map // map[int64]*big.Rat
+	cdfCache      sync.Map // map[int64]*big.Rat
+	resDenomCache atomic.Value
+}
+
+func NewBinomial(n, pn, pd int64) *RegularBinomial {
+	return &RegularBinomial{
+		N:  big.NewInt(n),
+		pn: big.NewInt(pn),
+		pd: big.NewInt(pd),
+	}
+}
+
+// exp computes x**y with a optimize way.
+func (b *RegularBinomial) Exp(x *big.Int, y float64) *big.Int {
+	if y == 0 {
+		return bigOne
+	}
+
+	if y == 1 {
+		return x
+	}
+
+	var (
+		cache *sync.Map
+		res   *big.Int
+	)
+	// get the corresponding cache map
+	if x.Cmp(b.pn) == 0 {
+		cache = &b.pnExpCache
+	} else if x.Cmp(new(big.Int).Sub(b.pd, b.pn)) == 0 {
+		cache = &b.tpnExpCache
+	}
+	if cache != nil {
+		if exp, exist := cache.Load(y); exist {
+			return exp.(*big.Int)
+		}
+	}
+
+	if y == 2 {
+		res = new(big.Int).Mul(x, x)
+	} else {
+		ly := math.Floor(math.Sqrt(float64(y)))
+		ry := math.Floor(y - ly)
+		res = new(big.Int).Mul(b.Exp(x, ly), b.Exp(x, ry))
+	}
+	if cache != nil {
+		cache.Store(y, res)
+	}
+	return res
+}
+
+func (b *RegularBinomial) CDF(j int64) *big.Rat {
+	if j < 0 {
+		return new(big.Rat).SetInt64(0)
+	}
+	if j >= b.N.Int64() {
+		return new(big.Rat).SetInt64(1)
+	}
+
+	if cdf, exist := b.cdfCache.Load(j); exist {
+		return cdf.(*big.Rat)
+	}
+
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	k := int64(j - 1)
+	var res = new(big.Rat).SetInt64(0)
+	for k >= 0 {
+		if cdf, exist := b.cdfCache.Load(k); exist {
+			res = new(big.Rat).Set(cdf.(*big.Rat))
+			break
+		}
+		k--
+	}
+	resChan := make(chan *big.Rat, j+1)
+	k++
+	begin := k
+	for k <= j {
+		go func(i int64) {
+			prob := b.Prob(i)
+			resChan <- prob
+		}(k)
+		k++
+	}
+	k = begin
+	for k <= j {
+		select {
+		case rat := <-resChan:
+			res.Add(res, rat)
+			k++
+		}
+	}
+	close(resChan)
+	b.cdfCache.Store(j, res)
+	return res
+}
+
+func (b *RegularBinomial) Prob(k int64) *big.Rat {
+	if prob, exist := b.probCache.Load(k); exist {
+		return prob.(*big.Rat)
+	}
 
 	// calculate p^k * p^(n-k)
-	lnum := new(big.Int).Exp(numer, bk, nil)
-	rnum := new(big.Int).Exp(new(big.Int).Sub(denom, numer), sbk, nil)
+	N := b.N.Int64()
+	lnum := b.Exp(b.pn, float64(k))
+	rnum := b.Exp(new(big.Int).Sub(b.pd, b.pn), float64(N-k))
 	resNum := new(big.Int).Mul(lnum, rnum)
-	//fmt.Printf("resNum %v\n", resNum.Int64())
-	resDenom := new(big.Int).Exp(denom, b.N, nil)
-	//fmt.Printf("resDenom %v\n", resDenom.Int64())
 
-	mulRat := new(big.Rat).SetFrac(resNum, resDenom)
+	mulRat := new(big.Rat).SetFrac(resNum, b.resDenom())
 
 	// calculate C(n,k)
-	bino := new(big.Int).Binomial(b.N.Int64(), k)
+	bino := new(big.Int).Binomial(N, k)
 
 	// prob = C(n,k) * p^k * p^(n-k)
 	prob := new(big.Rat).Mul(new(big.Rat).SetInt(bino), mulRat)
 
-	b.probCache[k] = prob
+	b.probCache.Store(k, prob)
 	return prob
+}
+
+func (b *RegularBinomial) Probability() *big.Rat {
+	return new(big.Rat).SetFrac(b.pn, b.pd)
+}
+
+func (b *RegularBinomial) resDenom() *big.Int {
+	if res := b.resDenomCache.Load(); res != nil {
+		return res.(*big.Int)
+	}
+	resDenom := b.Exp(b.pd, float64(b.N.Int64()))
+	b.resDenomCache.Store(resDenom)
+	return resDenom
 }

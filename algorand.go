@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"math/rand"
 	"time"
+	"context"
+	"sync"
 )
 
 var (
@@ -173,7 +175,7 @@ func (alg *Algorand) processMain() {
 	//log.Infof("node %d begin to perform consensus at round %d", alg.id, currRound)
 	// 1. block proposal
 	block := alg.blockProposal(false)
-	//log.Debugf("node %d init BA with block #%d %s, is empty? %v", alg.id, block.Round, block.Hash(), block.Signature == nil)
+	log.Debugf("node %d init BA with block #%d %s, is empty? %v", alg.id, block.Round, block.Hash(), block.Signature == nil)
 
 	// 2. init BA with block with the highest priority.
 	consensusType, block := alg.BA(currRound, block)
@@ -502,17 +504,16 @@ func (alg *Algorand) countVotes(round uint64, step int, threshold float64, expec
 			counts[hash] += votes
 			// if we got enough votes, then output the target hash
 			if uint64(counts[hash]) >= uint64(float64(expectedNum)*threshold) {
+				//log.Infof("votes %v,threshold %v", counts[hash], uint64(float64(expectedNum)*threshold))
 				return hash, nil
 			}
 		}
-
 	}
 }
 
 // processMsg validates incoming vote message.
 func (alg *Algorand) processMsg(message *VoteMessage, expectedNum int) (votes int, hash common.Hash, vrf []byte) {
-	pubkey := message.RecoverPubkey()
-	if err := message.VerifySign(pubkey); err != nil {
+	if err := message.VerifySign(); err != nil {
 		return 0, common.Hash{}, nil
 	}
 
@@ -570,24 +571,92 @@ func maxPriority(vrf []byte, users int) []byte {
 // subUsers return the selected amount of sub-users determined from the mathematics protocol.
 func subUsers(expectedNum int, weight uint64, vrf []byte) int {
 	binomial := NewBinomial(int64(weight), int64(expectedNum), int64(TotalTokenAmount()))
-	j := 0
+	//binomial := NewApproxBinomial(int64(expectedNum), weight)
+	//binomial := &distuv.Binomial{
+	//	N: float64(weight),
+	//	P: float64(expectedNum) / float64(TotalTokenAmount()),
+	//}
 	// hash / 2^hashlen ∉ [ ∑0,j B(k;w,p), ∑0,j+1 B(k;w,p))
 	hashBig := new(big.Int).SetBytes(vrf)
 	maxHash := new(big.Int).Exp(big.NewInt(2), big.NewInt(common.HashLength*8), nil)
 	hash := new(big.Rat).SetFrac(hashBig, maxHash)
+	var lower, upper *big.Rat
+	j := 0
 	for uint64(j) <= weight {
-		lower := binomial.CDF(int64(j))
-		upper := binomial.CDF(int64(j + 1))
+		if upper != nil {
+			lower = upper
+		} else {
+			lower = binomial.CDF(int64(j))
+		}
+		upper = binomial.CDF(int64(j + 1))
 		//log.Infof("hash %v, lower %v , upper %v", hash.Sign(), lower.Sign(), upper.Sign())
 		if hash.Cmp(lower) >= 0 && hash.Cmp(upper) < 0 {
 			break
 		}
 		j++
 	}
+	//log.Infof("j %d", j)
 	if uint64(j) > weight {
 		j = 0
 	}
+	//j := parallelTrevels(runtime.NumCPU(), weight, hash, binomial)
 	return j
+}
+
+func parallelTrevels(core int, N uint64, hash *big.Rat, binomial Binomial) int {
+	var wg sync.WaitGroup
+	groups := N / uint64(core)
+	background, cancel := context.WithCancel(context.Background())
+	resChan := make(chan int)
+	notFound := make(chan struct{})
+	for i := 0; i < core; i++ {
+		go func(ctx context.Context, begin uint64) {
+			wg.Add(1)
+			defer wg.Done()
+			var (
+				end          uint64
+				upper, lower *big.Rat
+			)
+			if begin == uint64(core-2) {
+				end = N + 1
+			} else {
+				end = groups * (begin + 1)
+			}
+			for j := groups * begin; j < end; j++ {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				if upper != nil {
+					lower = upper
+				} else {
+					lower = binomial.CDF(int64(j))
+				}
+				upper = binomial.CDF(int64(j + 1))
+				//log.Infof("hash %v, lower %v , upper %v", hash.Sign(), lower.Sign(), upper.Sign())
+				if hash.Cmp(lower) >= 0 && hash.Cmp(upper) < 0 {
+					resChan <- int(j)
+					return
+				}
+				j++
+			}
+			return
+		}(background, uint64(i))
+	}
+
+	go func() {
+		wg.Wait()
+		close(notFound)
+	}()
+
+	select {
+	case j := <-resChan:
+		cancel()
+		return j
+	case <-notFound:
+		return 0
+	}
 }
 
 // constructSeed construct a new bytes for vrf generation.

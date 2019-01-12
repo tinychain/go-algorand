@@ -15,9 +15,9 @@ const (
 	// Algorand system parameters
 
 	expectedBlockProposers        = 26
-	expectedCommitteeMembers      = 2000
+	expectedCommitteeMembers      = 60
 	thresholdOfBAStep             = 0.685
-	expectedFinalCommitteeMembers = 10000
+	expectedFinalCommitteeMembers = 200
 	finalThreshold                = 0.74
 	MAXSTEPS                      = 150
 

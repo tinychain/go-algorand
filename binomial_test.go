@@ -7,6 +7,18 @@ import (
 	"gonum.org/v1/gonum/stat/distuv"
 )
 
+func TestRegularBinomial_Exp(t *testing.T) {
+	binomial := NewBinomial(5, 4, 5)
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(4), 1).Cmp(big.NewInt(4)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(4), 2).Cmp(big.NewInt(16)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(4), 3).Cmp(big.NewInt(64)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(5), 1).Cmp(big.NewInt(5)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(5), 2).Cmp(big.NewInt(25)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(5), 3).Cmp(big.NewInt(125)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(2), 2).Cmp(big.NewInt(4)))
+	assert.Equal(t, 0, binomial.Exp(big.NewInt(2), 4).Cmp(big.NewInt(16)))
+}
+
 func TestBinomial_CDF(t *testing.T) {
 	binomial := NewBinomial(5, 1, 2)
 	b0 := big.NewRat(1, 32)
@@ -25,7 +37,7 @@ func TestBinomial_CDF(t *testing.T) {
 
 func BenchmarkBinomial_CDF(b *testing.B) {
 	b.ResetTimer()
-	binomial_1 := NewBinomial(10000, 1, 100)
+	binomial_1 := NewBinomial(1000, 1, 1000000)
 	for i := 0; i < b.N; i++ {
 		binomial_1.CDF(int64(i))
 	}
@@ -34,7 +46,7 @@ func BenchmarkBinomial_CDF(b *testing.B) {
 func BenchmarkBinomial_distuv(b *testing.B) {
 	b.ResetTimer()
 	binomial_2 := &distuv.Binomial{
-		N: 10000,
+		N: 1000,
 		P: float64(1) / float64(100),
 	}
 	for i := 0; i < b.N; i++ {

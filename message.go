@@ -16,7 +16,7 @@ const (
 )
 
 type VoteMessage struct {
-	Signature  []byte      `json:"publicKey"`
+	Signature  []byte      `json:"signature"`
 	Round      uint64      `json:"round"`
 	Step       int         `json:"step"`
 	VRF        []byte      `json:"vrf"`
@@ -33,7 +33,8 @@ func (v *VoteMessage) Deserialize(data []byte) error {
 	return json.Unmarshal(data, v)
 }
 
-func (v *VoteMessage) VerifySign(pubkey *PublicKey) error {
+func (v *VoteMessage) VerifySign() error {
+	pubkey := v.RecoverPubkey()
 	data := bytes.Join([][]byte{
 		common.Uint2Bytes(v.Round),
 		common.Uint2Bytes(uint64(v.Step)),
