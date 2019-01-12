@@ -4,6 +4,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"math/big"
 	"testing"
+	"gonum.org/v1/gonum/stat/distuv"
 )
 
 func TestBinomial_CDF(t *testing.T) {
@@ -23,5 +24,20 @@ func TestBinomial_CDF(t *testing.T) {
 }
 
 func BenchmarkBinomial_CDF(b *testing.B) {
+	b.ResetTimer()
+	binomial_1 := NewBinomial(10000, 1, 100)
+	for i := 0; i < b.N; i++ {
+		binomial_1.CDF(int64(i))
+	}
+}
 
+func BenchmarkBinomial_distuv(b *testing.B) {
+	b.ResetTimer()
+	binomial_2 := &distuv.Binomial{
+		N: 10000,
+		P: float64(1) / float64(100),
+	}
+	for i := 0; i < b.N; i++ {
+		binomial_2.CDF(float64(i))
+	}
 }
