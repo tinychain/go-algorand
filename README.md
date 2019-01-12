@@ -4,8 +4,9 @@ Go implementation of Algorand algorithm based on the paper [gilad-algorand-eprin
 It's just a POC demo and cannot be used in PROD ENV.
 
 ## Analysis
-- Binomial distribution function used by `sortision` is too slow!!!!!.
-- 
+Some problems need to be resolved:
+   - Binomial distribution function used by `sortision` is too slow!!!!!.
+   - Amount of selected block proposers is too small.
 
 ## How to run
 Running regular Algorand algorithm.
@@ -43,7 +44,7 @@ OPTIONS:
     - `0`: It's an honest user.
     - `1`: When the user happens to be the proposer with the highest priority, it will send one version of block to half of its remote peers, and another version to the others.(NEED TESTING)
     - `2`: During the BA* period, the user will vote empty block forever.(NEED TESTING)
-    - `3`: The user attend in proposers and committee selected but vote nothing.(NEED TESTING)
+    - `3`: The user attends in proposers and committee selection, but votes nothing.(NEED TESTING)
 - `--latency,-l`: The random upper bound of network latency. The peer will simulate a random delay between 0 and ${value} when sending messages.(NEED TESTING)
 
 ## Docs
