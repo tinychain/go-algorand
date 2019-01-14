@@ -13,11 +13,10 @@ func TotalTokenAmount() uint64 { return UserAmount * TokenPerUser }
 
 const (
 	// Algorand system parameters
-
 	expectedBlockProposers        = 26
-	expectedCommitteeMembers      = 60
+	expectedCommitteeMembers      = 10
 	thresholdOfBAStep             = 0.685
-	expectedFinalCommitteeMembers = 200
+	expectedFinalCommitteeMembers = 20
 	finalThreshold                = 0.74
 	MAXSTEPS                      = 150
 

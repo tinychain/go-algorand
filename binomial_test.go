@@ -2,9 +2,9 @@ package main
 
 import (
 	"github.com/stretchr/testify/assert"
+	"gonum.org/v1/gonum/stat/distuv"
 	"math/big"
 	"testing"
-	"gonum.org/v1/gonum/stat/distuv"
 )
 
 func TestRegularBinomial_Exp(t *testing.T) {
@@ -33,6 +33,18 @@ func TestBinomial_CDF(t *testing.T) {
 	assert.Equal(t, 0, binomial.CDF(3).Cmp(b3))
 	assert.Equal(t, 0, binomial.CDF(4).Cmp(b4))
 	assert.Equal(t, 0, binomial.CDF(5).Cmp(b5))
+
+	binomial2 := NewBinomial(4, 1, 3)
+	c0 := big.NewRat(16, 81)
+	c1 := big.NewRat(48, 81)
+	c2 := big.NewRat(72, 81)
+	c3 := big.NewRat(80, 81)
+	c4 := big.NewRat(81, 81)
+	assert.Equal(t, 0, binomial2.CDF(0).Cmp(c0))
+	assert.Equal(t, 0, binomial2.CDF(1).Cmp(c1))
+	assert.Equal(t, 0, binomial2.CDF(2).Cmp(c2))
+	assert.Equal(t, 0, binomial2.CDF(3).Cmp(c3))
+	assert.Equal(t, 0, binomial2.CDF(4).Cmp(c4))
 }
 
 func BenchmarkBinomial_CDF(b *testing.B) {

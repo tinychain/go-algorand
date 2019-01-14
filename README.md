@@ -4,12 +4,16 @@ Go implementation of Algorand algorithm based on the paper [gilad-algorand-eprin
 It's just a POC demo and cannot be used in PROD ENV.
 
 ## Analysis
-Some problems need to be resolved:
-   - Binomial distribution function used by `sortision` is too slow!!!!!.
-   - Amount of selected block proposers is too small.
+- OS: Mac OSX Mojava 
+- CPU: Intel Core i5 8th 2.3GHz 4 cores.
+- RAM: 16GB
+
+Some problems founded when run on a single machine:
+   - Binomial distribution function(implemented with `big.Rat`) used by `sortision` is too slow!!!.
+   - Due to the binomial bottleneck, the amount of proposers or committee members are often too small to make the votes cross threshold.
 
 ## How to run
-Running regular Algorand algorithm.
+Running regular Algorand algorithm
 ```shell
 go build
 ./algorand regular

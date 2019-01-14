@@ -86,11 +86,15 @@ func (p *Peer) halfGossip(typ int, data []byte, half int) {
 func (p *Peer) handle(typ int, data []byte) error {
 	if typ == BLOCK {
 		blk := &Block{}
-		blk.Deserialize(data)
+		if err := blk.Deserialize(data); err != nil {
+			return err
+		}
 		p.addBlock(blk.Hash(), blk)
 	} else if typ == BLOCK_PROPOSAL || typ == FORK_PROPOSAL {
 		bp := &Proposal{}
-		bp.Deserialize(data)
+		if err := bp.Deserialize(data); err != nil {
+			return err
+		}
 		p.pmu.RLock()
 		maxProposal := p.maxProposals[bp.Round]
 		p.pmu.RUnlock()
@@ -108,7 +112,9 @@ func (p *Peer) handle(typ int, data []byte) error {
 		p.setMaxProposal(bp.Round, bp)
 	} else if typ == VOTE {
 		vote := &VoteMessage{}
-		vote.Deserialize(data)
+		if err := vote.Deserialize(data); err != nil {
+			return err
+		}
 		key := constructVoteKey(vote.Round, vote.Step)
 		p.vmu.RLock()
 		list, ok := p.incomingVotes[key]

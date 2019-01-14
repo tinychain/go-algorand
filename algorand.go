@@ -2,14 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"github.com/rcrowley/go-metrics"
 	"github.com/tinychain/algorand/common"
 	"math/big"
 	"math/rand"
-	"time"
-	"context"
 	"sync"
+	"time"
 )
 
 var (
@@ -147,21 +147,32 @@ func (alg *Algorand) run() {
 	// sleep 1 millisecond for all peers ready.
 	time.Sleep(1 * time.Millisecond)
 
-	forkInterval := time.NewTicker(forkResolveInterval)
+	go alg.forkLoop()
 
 	// propose block
 	for {
 		select {
 		case <-alg.quitCh:
 			return
-		case <-forkInterval.C:
-			// periodically resolve fork
-			alg.processForkResolve()
 		default:
 			alg.processMain()
 		}
 	}
 
+}
+
+// forkLoop periodically resolves fork
+func (alg *Algorand) forkLoop() {
+	forkInterval := time.NewTicker(forkResolveInterval)
+
+	for {
+		select {
+		case <-alg.quitCh:
+			return
+		case <-forkInterval.C:
+			alg.processForkResolve()
+		}
+	}
 }
 
 // processMain performs the main processing of algorand algorithm.
@@ -190,6 +201,9 @@ func (alg *Algorand) processMain() {
 
 // processForkResolve performs a special algorand processing to resolve fork.
 func (alg *Algorand) processForkResolve() {
+	// force quit the hanging in BA if any.
+	close(alg.hangForever)
+
 	if metricsRound == alg.round() {
 		proposerSelectedHistogram.Update(proposerSelectedCounter.Count())
 		proposerSelectedCounter.Clear()
@@ -201,6 +215,8 @@ func (alg *Algorand) processForkResolve() {
 	_, fork := alg.BA(longest.Round, longest)
 	// commit fork
 	alg.chain.resolveFork(fork)
+
+	alg.hangForever = make(chan struct{})
 }
 
 // proposeBlock proposes a new block.
@@ -341,8 +357,7 @@ func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash
 		return nil
 	}
 
-	role := role(committee, round, step)
-	vrf, proof, j := alg.sortition(alg.sortitionSeed(round), role, expectedNum, alg.tokenOwn())
+	vrf, proof, j := alg.sortition(alg.sortitionSeed(round), role(committee, round, step), expectedNum, alg.tokenOwn())
 
 	if j > 0 {
 		// Gossip vote message
@@ -362,7 +377,7 @@ func (alg *Algorand) committeeVote(round uint64, step int, expectedNum int, hash
 		if err != nil {
 			return err
 		}
-		alg.peer.gossip(VOTE, data)
+		go alg.peer.gossip(VOTE, data)
 	}
 	return nil
 }
@@ -376,11 +391,10 @@ func (alg *Algorand) BA(round uint64, block *Block) (int8, *Block) {
 	if alg.maliciousType == EvilVoteEmpty {
 		hash = emptyHash(round, block.ParentHash)
 		alg.reduction(round, hash)
-		hash = alg.binaryBA(round, hash)
 	} else {
 		hash = alg.reduction(round, block.Hash())
-		hash = alg.binaryBA(round, hash)
 	}
+	hash = alg.binaryBA(round, hash)
 	r, _ := alg.countVotes(round, FINAL, finalThreshold, expectedFinalCommitteeMembers, lamdaStep)
 	if prevHash := alg.lastBlock().Hash(); hash == emptyHash(round, prevHash) {
 		// empty block
@@ -503,8 +517,8 @@ func (alg *Algorand) countVotes(round uint64, step int, threshold float64, expec
 			voters[string(pubkey.pk)] = struct{}{}
 			counts[hash] += votes
 			// if we got enough votes, then output the target hash
+			//log.Infof("node %d receive votes %v,threshold %v at step %d", alg.id, counts[hash], uint64(float64(expectedNum)*threshold), step)
 			if uint64(counts[hash]) >= uint64(float64(expectedNum)*threshold) {
-				//log.Infof("votes %v,threshold %v", counts[hash], uint64(float64(expectedNum)*threshold))
 				return hash, nil
 			}
 		}

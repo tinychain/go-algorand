@@ -1,11 +1,11 @@
 package main
 
 import (
-	"math/big"
-	"sync/atomic"
-	"sync"
-	"runtime"
 	"math"
+	"math/big"
+	"runtime"
+	"sync"
+	"sync/atomic"
 )
 
 var (
